@@ -220,6 +220,10 @@ Design and documentation complete; **implementation not started**. The build run
 each independently runnable — starting with M0, which verifies the logprobs assumption on this
 machine before anything depends on it.
 
-- **[docs/PLAN.md](docs/PLAN.md)** — milestones, config surface, Redis schema, file tree, verification
-- **[docs/RESEARCH.md](docs/RESEARCH.md)** — verified API shapes, confidence math, measured constraints
-- **[CLAUDE.md](CLAUDE.md)** — working notes for AI agents in this repo
+| Document | What's in it |
+|---|---|
+| **[docs/PLAN.md](docs/PLAN.md)** | Milestones, config surface, Redis schema, file tree, verification commands |
+| **[docs/API.md](docs/API.md)** | The HTTP contract — endpoints, the `x_hlr` block, error shapes, cost math |
+| **[docs/DECISIONS.md](docs/DECISIONS.md)** | Why it's built this way, what was rejected, and what would change each call |
+| **[docs/RESEARCH.md](docs/RESEARCH.md)** | Verified API shapes, confidence math, measured constraints, sources |
+| **[CLAUDE.md](CLAUDE.md)** | Working notes for AI agents in this repo |

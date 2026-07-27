@@ -3,7 +3,10 @@
 Context for an AI agent working in this repo. Human-facing docs live in [README.md](README.md).
 
 **Read before writing any code:** [docs/RESEARCH.md](docs/RESEARCH.md) (verified API shapes and hard
-numbers) and [docs/PLAN.md](docs/PLAN.md) (milestones, config surface, file tree).
+numbers), [docs/PLAN.md](docs/PLAN.md) (milestones, config surface, file tree), and
+[docs/API.md](docs/API.md) (the HTTP contract you are implementing — if code and that doc disagree,
+one of them is a bug). [docs/DECISIONS.md](docs/DECISIONS.md) records why each choice was made and
+what would justify reversing it — read it before proposing a different approach.
 
 ---
 

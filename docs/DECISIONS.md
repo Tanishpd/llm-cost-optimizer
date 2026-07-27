@@ -1,0 +1,230 @@
+# Design Decisions
+
+Why this is built the way it is, including what was rejected. Each entry states the decision, the
+reasoning, and what would make it worth revisiting — a decision without a reversal condition is a
+prejudice.
+
+Evidence for the factual claims lives in [RESEARCH.md](RESEARCH.md).
+
+---
+
+## D1 — Two local model tiers, not one
+
+**Decision.** `qwen2.5:0.5b` → `qwen2.5:3b` → frontier, with a confidence gate at each hop.
+
+**Why.** A single gate only ever answers "local or not". Two gates make the gateway decide *how much
+compute a prompt deserves*, which is the actual thesis. It also produces a genuine cost/quality
+frontier across four options in eval rather than a single threshold sweep, and the 0.5B is weak enough
+that gate 1 fires often — the mechanism is visible in a demo instead of theoretical.
+
+The RAM ceiling (D2) helps rather than hurts here: 0.5B + 3B together cost less resident memory than
+one 7B, and give a graduated ladder instead of a binary.
+
+**Rejected.** One larger local model (simpler, but only one gate to calibrate and no intermediate
+step). Three local tiers (a fourth resident model doesn't fit in 8 GB).
+
+**Revisit if.** Eval shows gate 1 accepting <10% of prompts — then the 0.5B is dead weight and the
+cascade should collapse to one local tier.
+
+## D2 — RAM, not disk, caps model size
+
+**Decision.** Local models are capped at 3B–4B. `mistral:7b` — named in the original brief — is
+excluded.
+
+**Why.** 8 GB unified memory, with swap already 90% full before any model loads. macOS takes ~3 GB
+idle and a browser 1–2 GB, leaving ~3.5–4.5 GB. A 7B Q4 needs ~4.8 GB resident and would thrash
+against a saturated swap file.
+
+This was initially misread as a disk constraint. Disk was freed; the ceiling didn't move. Worth
+recording because it's the kind of thing that gets "fixed" by buying storage and stays broken.
+
+**Revisit if.** Different hardware. On 16 GB+, a 7B–8B tier slots in as a new row in `app/cascade.py`.
+
+## D3 — Geometric mean of token probabilities, not sequence probability
+
+**Decision.** `confidence = exp(mean(logprob_i))`, equivalently 1/perplexity.
+
+**Why.** Sequence probability `∏ p_i` decays exponentially with length — a 100-token answer at a
+healthy p=0.9 per token scores 2.6e-5. Any fixed threshold rejects everything longer than a few
+tokens; it measures length, not certainty. The geometric mean is length-invariant.
+
+**Rejected.** Sequence probability (the obvious reading of the brief, and wrong). Min-token
+probability alone (too noisy — one rare token tanks a good answer); it's retained as a *secondary*
+signal, not the headline.
+
+**Revisit if.** Eval shows another metric in the feature vector dominating `geo_mean` in the fitted
+calibrator, which would be a reason to change the raw-mode headline.
+
+## D4 — Ship `raw` mode, earn the 85% later
+
+**Decision.** Two confidence modes. `raw` uses `geo_mean` with thresholds 0.55/0.62. `calibrated`
+(post-eval) maps the feature vector to `P(this tier's answer is as good as the frontier's)` and uses
+0.85 at both gates.
+
+**Why.** The brief says "escalate below 85% confidence." Raw `geo_mean` on a small model sits around
+0.5–0.75 *even when correct*, because language offers many valid phrasings. Shipping 0.85 against the
+raw metric would escalate nearly everything and look broken while being arithmetically correct.
+
+Rather than quietly retune the number and claim it's 85%, both modes exist explicitly. In calibrated
+mode the 85% means what the brief intended.
+
+**Rejected.** Hardcoding 0.85 against the raw metric (broken). Silently substituting a different
+number and calling it 85% (dishonest). Dropping the threshold concept (loses the brief's intent).
+
+**Revisit.** Never collapse the two modes — the distinction is the point.
+
+## D5 — One calibrator per gate
+
+**Decision.** Gate 1 and gate 2 get separately fitted parameters in `eval/calibrator.json`.
+
+**Why.** They're different decisions with different consequences and different feature distributions.
+Gate 1 escalates to something nearly free, so it should be trigger-happy; gate 2 escalates to real
+money, so it should be reluctant. Sharing parameters would be a subtle correctness bug that still
+"works" — the worst kind.
+
+**Revisit if.** Eval shows the two fits converging to near-identical parameters, which would suggest
+the tier difference doesn't matter and one model suffices.
+
+## D6 — Ollama serves embeddings; no torch
+
+**Decision.** `nomic-embed-text` over Ollama's `/api/embed`. No `torch`, `transformers`, or
+`sentence-transformers`. Runtime Python is numpy-only; `scikit-learn` is eval-only.
+
+**Why.** Originally a disk decision, now a merit one — torch on macOS arm64 is ~471 MB unpacked (not
+the ~2 GB usually cited; that figure is Linux + CUDA), so it *would* fit. It's still excluded because
+it means a second inference runtime and a second copy of model weights competing for the RAM that D2
+already says is scarce — to compute vectors Ollama already serves over HTTP.
+
+**Rejected.** `sentence-transformers` (pulls torch). ONNX Runtime + a quantized MiniLM (leaner, but
+still a second runtime and a second artifact to manage for no quality gain).
+
+**Revisit if.** A learned router (D10) needs a model Ollama can't serve. `classifier.py`'s Protocol is
+the seam.
+
+## D7 — Brute-force cosine, and Redis stays at 7.2
+
+**Decision.** Semantic search is a numpy matmul over a warm in-process matrix, Redis as source of
+truth. No vector index. Do not `brew upgrade redis`.
+
+**Why.** Installed Redis 7.2.7 has no modules — no `FT.*`, no vector index. Redis 8.8.1 *is* available
+via homebrew and would ship `VADD`/`VSIM` compiled in (vector-sets is statically linked, gated only on
+C11 atomics, which this machine has). It was still declined: upgrading a running server risks
+RDB/AOF-compat pain with an awkward downgrade path, and it buys nothing at this scale.
+
+768-dim float32 = 3 KB/vector. At 10k entries that's 31 MB and a 7.7M-MAC matmul — well under 1 ms via
+BLAS. An index starts paying somewhere past 100k entries, which a demo cache will never reach.
+
+**Revisit if.** Cache exceeds ~100k entries, or the process needs to run multi-worker. `semantic.py`
+is written behind an interface so it's a drop-in.
+
+## D8 — Non-streaming first
+
+**Decision.** `stream: true` returns 400.
+
+**Why.** The gate cannot decide whether to escalate until the complete response and its logprobs
+exist. Streaming a local answer means streaming tokens that may then be discarded and replaced by the
+frontier's — worse than not streaming. Ollama's non-streaming path accumulates all chunks' logprobs
+into the final response, which is exactly what the gate needs.
+
+**Rejected.** Streaming with post-hoc correction (visibly rewrites text the user already read).
+
+**Revisit.** Buffer the local answer, stream only after the decision. Real work, no demo value,
+deferred rather than dismissed.
+
+## D9 — The frontier tier speaks real HTTP, even when mocked
+
+**Decision.** `mock_frontier/` is a separate FastAPI service on `:8001` implementing genuine OpenAI
+`/v1/chat/completions`, including a truthful `usage` block. The gateway makes real network calls to it.
+
+**Why.** Keeps `FRONTIER_BASE_URL=https://api.openai.com/v1` a config change rather than a rewrite,
+and means the escalation path exercises real serialization, timeouts, and failure modes rather than an
+in-process stub that can't fail realistically. `MOCK_FAILURE_RATE` exists to test degradation.
+
+**Rejected.** An in-process function returning a static string (the brief's literal suggestion). It
+would make the cost numbers fake and the swap-to-real a refactor.
+
+## D10 — Heuristic router first, learned classifier later
+
+**Decision.** Ship hand-tuned features and weights. Define `classifier.py` as a Protocol from day one,
+implement nothing behind it yet.
+
+**Why.** The eval harness in M6 is what generates honest training labels. Writing a learned router
+first means training on hand-labeled guesses about what the models can handle — circular. Measure,
+then learn.
+
+**Revisit.** After M6, when `eval/runs/` holds real per-tier outcomes.
+
+## D11 — Real API for eval judging, mock for serving
+
+**Decision.** `EVAL_USE_REAL_FRONTIER=true` calls a live provider for reference answers and quality
+judgment during eval only. Responses cached to `eval/runs/`. Serving never uses it by default.
+
+**Why.** The mock returns canned text — it cannot tell you whether the 3B's answer was actually good.
+Without a real reference the calibrated 85% is decoration. ~120 prompts × 2 calls is a few dollars,
+once. Caching every response means re-fitting calibrators never re-spends.
+
+**Rejected.** Hand-labeling (slow, and calibration is only as good as the labels). Using the 3B to
+judge the 0.5B (works for gate 1, but nothing credible judges the top local tier — which is the gate
+that controls actual spend).
+
+## D12 — `qwen2.5` over `llama3.2`
+
+**Decision.** `qwen2.5:0.5b` and `qwen2.5:3b`.
+
+**Why.** Same family at both tiers keeps tokenization and prompt-format behaviour consistent, so
+confidence metrics are comparable across gates — a meaningful property when you're fitting separate
+calibrators on the same feature definitions. `qwen2.5:3b` is also 1.93 GB against `llama3.2:3b`'s 2.02
+GB, and the 0.5B has no llama equivalent (`llama3.2:1b` is 1.32 GB for a weaker role).
+
+**Revisit if.** Eval shows poor instruction-following at either tier. Swapping is a config change.
+
+## D13 — Local inference counted as $0
+
+**Decision.** `cost_usd = 0` for cache and local tiers. Savings are measured purely against an
+all-frontier baseline.
+
+**Why.** Electricity and amortized hardware are real but not meaningfully attributable per request.
+Inventing a number would make the headline figure look more rigorous while being less honest. The
+README states the simplification openly rather than burying it.
+
+**Revisit if.** Deployed somewhere with metered compute, where per-request local cost is a real number
+rather than an estimate.
+
+## D14 — The cascade is ordered data
+
+**Decision.** `app/cascade.py` holds a list of `(name, runner, gate)`. The executor walks it from the
+router's entry point. Adding or reordering a tier is a data change.
+
+**Why.** The obvious implementation — nested if/else across five tiers with two gates and cache
+short-circuits — becomes unreadable and untestable fast, and every new tier multiplies the branches.
+As data, each tier is independently testable and the ordering is inspectable at runtime (which is what
+`x_hlr.path` reports).
+
+**Revisit.** Don't. This is an invariant in CLAUDE.md.
+
+## D15 — Bias every cache judgment toward missing
+
+**Decision.** Cosine ≥ 0.95, plus number-set, entity-set, and negation guards that must *all* pass.
+Never semantic-cache multi-turn, differing system prompts, or prompts over `SEMANTIC_MAX_CHARS`.
+
+**Why.** High cosine is not sameness. *capital of Australia* / *capital of Austria* and *convert 50
+USD* / *convert 70 USD* both exceed 0.95. A wrong cache hit is worse than a miss — it's a confidently
+wrong answer served instantly and for free, with no signal that anything went wrong. A miss costs
+~120 ms.
+
+The asymmetry is severe enough that every judgment call goes the same way. `guard_rejected` is
+reported so over-conservatism is visible and tunable rather than silent.
+
+**Revisit if.** Telemetry shows guard rejections dominating hits, which would mean the guards are
+miscalibrated rather than merely strict.
+
+## D16 — Python 3.14.6, the system default
+
+**Decision.** Build the venv on `python3` (3.14.6). No version pinning gymnastics.
+
+**Why.** Every dependency publishes cp314 arm64 macOS wheels — numpy 2.5.1, scikit-learn 1.9.0,
+pydantic-core 2.47.0, uvloop, httptools, watchfiles (all verified against the PyPI JSON API). The
+usual reason to fall back to 3.12 doesn't apply, and using the default removes a setup step.
+
+**Revisit if.** A future dependency lacks 3.14 wheels — then `python3.13 -m venv .venv`, nothing else
+changes.
