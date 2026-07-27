@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Environment — never commit real keys
+.env
+.env.local
+!.env.example
+
+# Eval artifacts: cached API responses may contain prompt/response text,
+# and re-running costs money. Keep the fitted calibrator, drop the raw runs.
+eval/runs/
+!eval/runs/.gitkeep
+
+# Local state
+*.log
+logs/
+dump.rdb
+*.rdb
+
+# macOS
+.DS_Store
