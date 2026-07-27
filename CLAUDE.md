@@ -28,11 +28,15 @@ claim is treated as empirical — `eval/` measures it rather than assuming it.
 Verified 2026-07-27. These are the reason the architecture looks the way it does. Do not design
 around imagined constraints; design around these.
 
-- **8 GB RAM, swap already ~90% full. This is the binding constraint, and it cannot be relieved.**
-  Local models are capped at 3B–4B. `mistral:7b` (~4.8 GB resident) will thrash — it is excluded on
-  RAM, not disk. Keep `OLLAMA_MAX_LOADED_MODELS=2`; three resident models plus a browser will swap.
-- **Disk is ~20 GB free** (freed deliberately; ~3 GB is this project, the rest is swap headroom).
-  Do not treat it as spare capacity to fill.
+- **8 GB RAM. This is the binding constraint, and it cannot be relieved.** Local models are capped at
+  3B–4B. `mistral:7b` (~4.8 GB resident, estimated) will thrash — excluded on RAM, not disk. Keep
+  `OLLAMA_MAX_LOADED_MODELS=2`; three resident models plus a browser will swap.
+- **Disk: target ~20 GB free. Measured 7.9 GB (97% full) as of 2026-07-27**, up from 3.2 GB — being
+  reclaimed, not yet at target. RESEARCH.md §7 lists what's reclaimable. `scripts/preflight.py` gates
+  on this; **verify with `df -h /System/Volumes/Data` before pulling models** rather than assuming
+  headroom exists.
+- **Swap was 90% full at 3.2 GB disk; 71% at 7.9 GB.** Swap lives on disk, so the two constraints are
+  coupled — this is why disk headroom matters beyond storing weights.
 - **No torch, `transformers`, or `sentence-transformers`.** Not a disk limit any more — Ollama
   already serves embeddings over HTTP, so torch would add a second inference runtime competing for
   the same scarce RAM. Runtime Python is **numpy-only** for math; `scikit-learn` is eval-only.
@@ -79,11 +83,22 @@ the raw metric escalates nearly everything and looks broken. Two modes exist for
 calibrators, then `CONFIDENCE_MODE=calibrated` where 0.85 genuinely means "85% chance this tier's
 answer is as good as the frontier's". Don't collapse these two modes into one.
 
-**Two gates, two calibrators.** Gate 1 (0.5B → 3B) and gate 2 (3B → frontier) are *not* the same
-decision and must not share fitted parameters. Gate 1 escalates to something nearly free, so it
-should be trigger-happy; gate 2 escalates to real money, so it should be reluctant. In raw mode
-that's why `THRESHOLD_SMALL < THRESHOLD_LARGE`. In calibrated mode both target 0.85, but against
-separately fitted models — `eval/calibrator.json` holds one parameter set per gate.
+**Two gates, two calibrators.** Gate 1 (`small`, 0.5B → 3B) and gate 2 (`large`, 3B → frontier) are
+*not* the same decision and must not share fitted parameters. `eval/calibrator.json` holds one
+parameter set per gate.
+
+**Raw-mode thresholds are not comparable across gates.** `THRESHOLD_SMALL=0.55` and
+`THRESHOLD_LARGE=0.62` apply to different models, whose `geo_mean` distributions differ — the 0.5B
+scores systematically lower than the 3B on the same prompt. So the ordering of those two numbers
+carries *no* economic meaning; they're per-model starting points, to be replaced by measurement in
+M6. Do not write prose claiming the ordering encodes a policy — an earlier draft did, and it was
+backwards.
+
+**The economics only apply in calibrated mode**, where both scores are comparable probabilities.
+There the argument is: escalating from gate 1 costs ~450 ms and no money, so gate 1 should demand a
+*higher* acceptance probability (`TARGET_SMALL=0.92`) — when the next tier is nearly free, use it
+readily. Escalating from gate 2 costs real money, so it accepts at `TARGET_LARGE=0.85`, the spec's
+number, on the gate that actually spends. **Gate 1's bar is higher than gate 2's, not lower.**
 
 **The cascade is ordered data.** `app/cascade.py` holds a list of `(name, runner, gate)`; the
 executor walks it from the router's entry point. Adding or reordering a tier is a data change. Never
@@ -126,6 +141,7 @@ every judgment call toward missing.
 
 | Need | File |
 |---|---|
+| Understand the shape of it | `docs/ARCHITECTURE.md` — read before changing structure |
 | Add a config knob | `app/config.py` (+ table in PLAN.md, + `.env.example`) |
 | Change routing logic | `app/router/policy.py`; features in `heuristics.py` |
 | Add/reorder a tier | `app/cascade.py` — it's a list |
@@ -140,8 +156,9 @@ every judgment call toward missing.
 
 - **Better router:** implement the `classifier.py` Protocol. Train on labels from `eval/`, not
   hand-written ones. Measure before learning.
-- **Real provider:** set `FRONTIER_BASE_URL` + `FRONTIER_API_KEY`. No code change. Update the price
-  table in config, and verify current prices — the defaults are placeholders.
+- **Real provider:** set `FRONTIER_BASE_URL`, `FRONTIER_API_KEY`, `FRONTIER_MODEL`,
+  `FRONTIER_PRICE_IN`, `FRONTIER_PRICE_OUT`. All env vars — no code change. Verify current prices;
+  the defaults are placeholders, not quotes.
 - **Redis 8 Vector Sets:** `brew upgrade redis` gets 8.8.1 with `VADD`/`VSIM` compiled in (this
   machine has the required C11 atomics). Swap behind `cache/semantic.py`'s interface. Unnecessary
   below ~100k entries.

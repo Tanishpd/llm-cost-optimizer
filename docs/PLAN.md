@@ -18,60 +18,38 @@ using the model's own token log-probabilities as the signal. That claim is measu
 measures it instead of asserting it.
 
 Constraints that shaped the design (all verified — see RESEARCH.md):
-- **8 GB RAM with swap already 90% full** → the binding constraint. Caps local models at 3B–4B.
-  `mistral:7b` from the original spec is excluded on RAM, not disk.
-- **Redis 7.2.7 with no modules** → no vector index. Brute-force numpy cosine, sub-millisecond at
-  any cache size this will see.
-- **Ollama 0.30.10 exposes logprobs** → the confidence gate is real, not simulated.
-- **~20 GB disk being freed** → room for two local models, so the cascade gets a second gate.
+- **8 GB RAM** → the binding constraint, measured. Caps local models at 3B–4B. `mistral:7b` from the
+  original spec is excluded on RAM, not disk.
+- **Redis 7.2.7 with no modules** → no vector index. Brute-force numpy cosine — calculated
+  sub-millisecond to ~10k entries, a few ms at 100k. Not yet benchmarked.
+- **Ollama 0.30.10 *should* expose logprobs** → confirmed by reading the Ollama source
+  (RESEARCH.md §2), **not yet observed on this machine**. M0 exists to verify it and carries a
+  fallback (`CONFIDENCE_STRATEGY=self_consistency`) if it doesn't hold.
+- **Disk being freed toward ~20 GB** (7.9 GB as of 2026-07-27, up from 3.2 GB) → room for two local
+  models, so the cascade gets a second gate.
 
 ---
 
-## Architecture in one pass
+## Architecture
 
-A request descends five tiers and stops at the first one that can serve it. Cost rises at every
-step; the gateway's whole job is to stop early.
+**See [ARCHITECTURE.md](ARCHITECTURE.md)** — request lifecycle, component boundaries, state ownership,
+concurrency, failure model, and extension seams. It's the single source of truth for how the system is
+shaped; this document only sequences the work of building it.
 
-```
-POST /v1/chat/completions
-   │
-   ├─ T0  EXACT CACHE      blake2b(normalized prompt + model + params) → Redis GET
-   │                       hit → return                              $0      ~1 ms
-   │
-   ├─ T1  SEMANTIC CACHE   embed (nomic-embed-text) → cosine vs warm numpy matrix
-   │                       ≥ threshold AND clears entity/number/negation guards
-   │                       hit → return                              ~$0     ~20 ms
-   │
-   ├─ ──  PRE-ROUTER       heuristic features → entry tier. No model call.
-   │                       {small | large | escalate}
-   │
-   ├─ T2a SMALL SLM        qwen2.5:0.5b, logprobs:true, top_logprobs:5
-   │                       confidence ≥ THRESHOLD_SMALL → return      $0     ~120 ms
-   │                       else ↓                                    (gate 1)
-   │
-   ├─ T2b LARGE SLM        qwen2.5:3b, logprobs:true, top_logprobs:5
-   │                       confidence ≥ THRESHOLD_LARGE → return      $0     ~450 ms
-   │                       else ↓                                    (gate 2)
-   │
-   └─ T3  FRONTIER         OpenAI-shaped HTTP → mock (or a real provider)
-                           return                                     metered ~2 s
+The short version: a request descends five tiers — exact cache, semantic cache, `qwen2.5:0.5b`,
+`qwen2.5:3b`, frontier — and stops at the first that can serve it. A pre-router picks the *entry*
+tier from cheap heuristics; confidence gates on token logprobs decide each escalation after that.
 
-  every tier writes a telemetry record → Redis stream → /metrics + dashboard
-```
+Two constraints that shape the milestones below:
 
-**Why two local tiers.** A single gate only ever answers "local or not". Two gates make the gateway
-choose *how much* compute a prompt deserves, which is the actual thesis. It also means the eval in M6
-produces a genuine cost/quality frontier over four options rather than a single threshold sweep — and
-the 0.5B model is weak enough that gate 1 fires often, making the mechanism visible in a demo.
+**RAM.** Set `OLLAMA_MAX_LOADED_MODELS=2`. All three models resident (0.5B + 3B + embedder, an
+estimated ~3.0 GB) on an 8 GB machine with a browser open invites swap thrash. Two resident with
+`keep_alive=10m` means an occasional ~1–2 s cold load — telemetry must record those separately
+(`model_loads` in `/metrics`) so they don't pollute the latency percentiles.
 
-**Why the pre-router has three outcomes.** Running a long reasoning prompt through a 0.5B model just
-to discard it wastes ~120 ms and some RAM; `escalate` skips both local hops. Conversely a trivial
-prompt should not pay for the 3B. The router picks an *entry point*; the gates handle everything after.
-
-**RAM note.** Set `OLLAMA_MAX_LOADED_MODELS=2`. Keeping all three (0.5B + 3B + embedder ≈ 3.0 GB
-resident) loaded on an 8 GB machine with a browser open is asking for swap thrash. Two resident with
-`keep_alive=10m` means an occasional ~1–2 s cold load, which telemetry should record separately so it
-doesn't pollute the latency stats.
+**Router errors are cheap; gate errors are not.** The pre-router is allowed to guess wrong — a bad
+entry costs latency, because the gates still catch a weak answer. That asymmetry is why M3 ships a
+heuristic and M6 invests in calibrating the gates.
 
 ---
 
@@ -110,7 +88,11 @@ pairwise cosine < 0.9. Same `ConfidenceStrategy` interface, ~3× local latency, 
 Everything downstream is unaffected.
 
 Then write `scripts/preflight.py`: Ollama reachable, all three models present, Redis reachable,
-≥5 GB disk free, swap not saturated, logprobs functional. Every later milestone starts by running it.
+logprobs functional, swap not saturated, and **≥10 GB disk free — hard fail below that** (per
+RESEARCH.md §7, the machine is unpleasant below 10 GB because swap grows on disk), warning below the
+~20 GB target. Also record each model's actual resident RAM and its `geo_mean` on a fixed probe
+prompt, so RESEARCH.md §5's estimates and M4's thresholds get replaced by measurements. Every later
+milestone starts by running this.
 
 ### M1 — Skeleton gateway + local tiers + cost accounting
 
@@ -137,6 +119,7 @@ Demoable: a real OpenAI-shaped response with latency and token breakdown.
   which tier *served* and which tiers were *attempted* — a request that ran 0.5B then 3B then frontier
   cost all three latencies, and the dashboard should say so.
 - `GET /metrics` — JSON aggregates.
+- `DELETE /cache` — flush T0/T1 (dev convenience; see API.md).
 
 Demoable: same prompt twice, second returns in ~1 ms with `tier: "cache_exact"`.
 
@@ -160,8 +143,9 @@ Demoable: `POST /route` returns the decision and reason for a prompt without exe
   `/v1/chat/completions` including the `usage` block, with configurable simulated latency and
   per-token pricing. Because it's real HTTP, pointing `FRONTIER_BASE_URL` at a live provider is a
   config change, not a code change.
-- `app/confidence.py` — the metrics from RESEARCH.md §3: `geo_mean`, `p10_prob`, `mean_margin`,
-  `mean_norm_entropy`, `frac_low`, plus the hedge-phrase veto.
+- `app/confidence.py` — the metrics from RESEARCH.md §3: `geo_mean`, `min_prob`, `p10_prob`,
+  `mean_margin`, `mean_norm_entropy`, `frac_low`, plus the hedge-phrase veto. Pure functions over a
+  logprob array — no I/O, so this is the most testable module in the codebase. Unit-test it first.
 - `app/providers/frontier.py` — OpenAI-shaped client.
 - `app/cascade.py` — the tier chain as **ordered data**, not nested ifs. Each entry is
   `(name, runner, gate)`; the executor walks it from the router's entry point. Adding a tier means
@@ -169,8 +153,14 @@ Demoable: `POST /route` returns the decision and reason for a prompt without exe
 
 **Ship with `CONFIDENCE_MODE=raw`**, `THRESHOLD_SMALL=0.55`, `THRESHOLD_LARGE=0.62`. Do not ship 0.85
 against the raw geometric mean — RESEARCH.md §3 explains why that escalates nearly everything. The
-0.85 gets earned in M6. The small model's threshold is lower on purpose: it only has to be good
-enough to beat *its own* escalation cost, which is small.
+0.85 gets earned in M6.
+
+These two raw numbers are **per-model starting points and are not comparable to each other** — the
+0.5B's `geo_mean` distribution sits lower than the 3B's, so `0.55 < 0.62` reflects the models, not a
+policy. The economic asymmetry (escalating from gate 1 is nearly free, so gate 1 should demand a
+*higher* acceptance bar) only becomes expressible in calibrated mode, where the scores are comparable
+probabilities. Record the observed `geo_mean` distribution per tier from M0 onward so M6 has a
+starting distribution rather than a guess.
 
 Demoable: an easy prompt answered by the 0.5B; a medium one falling through to the 3B; an obscure one
 reaching the frontier — each with its confidence score and reason.
@@ -185,7 +175,8 @@ reaching the frontier — each with its confidence score and reason.
     markers match. These catch the classic failures — *capital of Australia* vs *capital of Austria*,
     *convert 50 USD* vs *convert 70 USD*;
   - **never** semantic-cache multi-turn conversations, differing system prompts, or prompts over
-    `SEMANTIC_MAX_CHARS` — long prompts carry attached context the embedding flattens away.
+    `SEMANTIC_MAX_CHARS` — long prompts carry attached context the embedding flattens away;
+  - LRU eviction over `hlr:lru` (zset of id → last-access ts), capped at `SEMANTIC_MAX_ENTRIES`.
 
 Demoable: "What's the capital of France?" then "Tell me France's capital city" → `tier:
 "cache_semantic"` with the similarity score. And the Australia/Austria pair correctly *missing*.
@@ -196,27 +187,38 @@ This is what elevates the project from "works" to "measured".
 
 - `eval/dataset.py` — ~120 labeled prompts across easy-factual / summarization / reasoning / code /
   obscure-factual.
+- `eval/dataset.py` — ~120 labeled prompts across easy-factual / summarization / reasoning / code /
+  obscure-factual.
 - `eval/run_eval.py` — for each prompt, run **all three** model tiers, capturing confidence features
-  at each. Then call a **real frontier API** for the reference answer and as the quality judge
-  (`EVAL_USE_REAL_FRONTIER=true`, needs a key; ~120 × 2 calls ≈ a few dollars, one time). The mock
-  cannot judge quality — this is the step that makes the calibrated threshold trustworthy.
-  Cache every response to `eval/runs/*.json` so re-fitting the calibrator never re-spends money.
+  at each. Then call a **real frontier API** (`FRONTIER_BASE_URL`/`FRONTIER_API_KEY`) for the
+  reference answer, and a **separate judge model** (`EVAL_JUDGE_BASE_URL`/`EVAL_JUDGE_MODEL`/
+  `EVAL_JUDGE_API_KEY`) to score each local answer against it. Using a different provider as judge
+  than as reference avoids a model grading its own output.
+  Cache every response to `eval/runs/*.json` so re-fitting never re-spends.
 - Fit **two** calibrators (logistic regression, `requirements-eval.txt`), one per gate, mapping the
   feature vector to `P(this tier's answer is as good as the frontier's)`. Persist to
   `eval/calibrator.json`.
+- **Validate the calibration, don't assume it.** Fit under k-fold cross-validation and report
+  held-out reliability per gate: reliability curve, Brier score, ECE. ~120 prompts is a small sample
+  for a 7-feature fit, and a fitted model is not a calibrated one.
 - Sweep both thresholds jointly; emit a cost-vs-quality frontier: escalation rate per gate, cost
   saved, quality preserved, and **false-cheap rate** (bad answers wrongly kept — the metric that
   actually matters).
-- Flip to `CONFIDENCE_MODE=calibrated` with `0.85`. **Now the 85% means what the spec intended:** an
-  85% probability the cheap answer is good enough.
+- Flip to `CONFIDENCE_MODE=calibrated` (`TARGET_SMALL=0.92`, `TARGET_LARGE=0.85`) **only if the
+  held-out reliability curve tracks the diagonal in the 0.7–0.95 region.** Otherwise stay in `raw`
+  and report that honestly — a negative result here is a real finding, not a failure.
 
-Serving continues to use the mock frontier by default; only eval spends real money.
+**Cost.** Per prompt: 1 reference completion + 1 judge call per local tier = 3 frontier-class calls;
+~120 prompts ≈ 360 calls. Compute the actual figure from your configured rates before running — the
+price constants in `.env.example` are placeholders, not quotes. Serving continues to use the mock by
+default; only eval spends real money.
 
 ### M7 — Dashboard
 
 `GET /dashboard` — self-contained HTML (no CDN), auto-refreshing: per-tier breakdown, cache hit rate,
-cumulative spend vs the all-frontier baseline, gate-1 and gate-2 escalation rates, latency
+cumulative spend vs the all-frontier baseline, per-gate (`small`, `large`) escalation rates, latency
 percentiles per tier, and a live request log showing each routing reason and the full tier path taken.
+This is also where the estimated latency figures quoted in README.md get replaced by real percentiles.
 
 ### M8 — Hardening and the demo
 
@@ -241,7 +243,8 @@ degraded gateway must still answer. Add trace IDs, timeouts, single-flight stamp
 | `FRONTIER_BASE_URL` | `http://localhost:8001/v1` | Point at a real provider to go live |
 | `FRONTIER_API_KEY` | `mock-key` | Bearer token |
 | `FRONTIER_MODEL` | `gpt-4o-mock` | Escalation model name |
-| `FRONTIER_PRICE_IN` / `_OUT` | `2.50` / `10.00` | USD per 1M tokens — **verify before quoting** |
+| `FRONTIER_PRICE_IN` | `2.50` | USD per 1M input tokens — **placeholder, verify before quoting** |
+| `FRONTIER_PRICE_OUT` | `10.00` | USD per 1M output tokens — **placeholder, verify before quoting** |
 | `EVAL_USE_REAL_FRONTIER` | `false` | M6 only; flips eval to a real API |
 | `EVAL_JUDGE_MODEL` | `claude-sonnet-5` | Quality judge for eval |
 | `REDIS_URL` | `redis://localhost:6379/0` | Cache + telemetry |
@@ -251,13 +254,20 @@ degraded gateway must still answer. Add trace IDs, timeouts, single-flight stamp
 | `SEMANTIC_THRESHOLD` | `0.95` | Cosine floor; conservative on purpose |
 | `SEMANTIC_MAX_CHARS` | `500` | Above this, skip semantic caching |
 | `CONFIDENCE_MODE` | `raw` | `raw` \| `calibrated` |
-| `THRESHOLD_SMALL` | `0.55` | Gate 1, against `geo_mean` in raw mode |
-| `THRESHOLD_LARGE` | `0.62` | Gate 2, against `geo_mean` in raw mode |
-| `CONFIDENCE_THRESHOLD` | `0.85` | Both gates, calibrated mode (M6+) |
+| `THRESHOLD_SMALL` | `0.55` | Gate 1, `geo_mean`, raw mode. **Not comparable to `THRESHOLD_LARGE`** — different model, different distribution |
+| `THRESHOLD_LARGE` | `0.62` | Gate 2, `geo_mean`, raw mode |
+| `TARGET_SMALL` | `0.92` | Gate 1 acceptance probability, calibrated mode. Higher than gate 2 on purpose — escalating from here is nearly free |
+| `TARGET_LARGE` | `0.85` | Gate 2 acceptance probability, calibrated mode. The spec's number, on the gate that spends money |
 | `CONFIDENCE_STRATEGY` | `logprobs` | `logprobs` \| `self_consistency` |
 | `TOP_LOGPROBS` | `5` | 0–20, server-validated |
 | `ROUTER_SMALL_MAX_TOKENS` | `60` | Enter at 2a below this |
 | `ROUTER_ESCALATE_MIN_TOKENS` | `600` | Skip both local tiers above this |
+| `SEMANTIC_MAX_ENTRIES` | `10000` | LRU cap on the semantic index |
+| `MOCK_LATENCY_MS` | `1800` | Mock frontier simulated latency (`mock_frontier` only) |
+| `MOCK_JITTER_MS` | `400` | Mock frontier latency jitter |
+| `MOCK_FAILURE_RATE` | `0.0` | Mock failure injection; raise to exercise M8 degradation |
+| `EVAL_JUDGE_BASE_URL` | `https://api.anthropic.com/v1` | Judge provider; separate from the frontier tier |
+| `EVAL_JUDGE_API_KEY` | *(unset)* | Key for the judge provider; M6 only |
 
 ## Redis key schema
 
@@ -270,7 +280,7 @@ degraded gateway must still answer. Add trace IDs, timeouts, single-flight stamp
 | `hlr:lru` | zset | id → last-access ts |
 | `hlr:telemetry` | stream | one record per request, `MAXLEN ~ 10000` |
 | `hlr:stats:tiers` | hash | counters: served-by and attempted-by, per tier |
-| `hlr:stats:gates` | hash | gate-1 / gate-2 pass and fail counts |
+| `hlr:stats:gates` | hash | gate `small` / `large` pass and fail counts |
 | `hlr:stats:cost` | hash | cumulative actual vs baseline USD |
 | `hlr:lock:{hash}` | string | `SET NX PX` single-flight |
 
@@ -309,8 +319,8 @@ scripts/
   preflight.py         environment checks
   demo.py              five-tier walkthrough
 static/dashboard.html
-docs/{PLAN,API,DECISIONS,RESEARCH}.md
-CLAUDE.md  README.md  requirements.txt  requirements-eval.txt  .env.example
+docs/{ARCHITECTURE,PLAN,API,DECISIONS,RESEARCH}.md
+CLAUDE.md  README.md  requirements.txt  requirements-eval.txt  .env.example  .gitignore
 ```
 
 ---
@@ -343,14 +353,14 @@ curl -s localhost:8000/v1/chat/completions -H "$H" -d "$Q" \
 # T1 semantic — reworded
 curl -s localhost:8000/v1/chat/completions -H "$H" \
   -d '{"model":"gateway","messages":[{"role":"user","content":"Tell me France'\''s capital city."}]}' \
-  | jq '.x_hlr | {tier, similarity}'
+  | jq '{tier: .x_hlr.tier, similarity: .x_hlr.cache.similarity}'
 # expect tier="cache_semantic", similarity >= 0.95
 
 # T1 guard — must MISS despite high cosine
 curl -s localhost:8000/v1/chat/completions -H "$H" \
   -d '{"model":"gateway","messages":[{"role":"user","content":"What is the capital of Australia?"}]}' \
-  | jq '.x_hlr | {tier, guard_rejected}'
-# expect tier != "cache_semantic"  (entity guard fired)
+  | jq '{tier: .x_hlr.tier, cache: .x_hlr.cache}'
+# expect tier != "cache_semantic", cache.guard_rejected == "entity_mismatch"
 
 # T2b — gate 1 fires, 0.5B not confident enough, 3B answers
 curl -s localhost:8000/v1/chat/completions -H "$H" \

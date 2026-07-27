@@ -49,17 +49,19 @@ healthy p=0.9 per token scores 2.6e-5. Any fixed threshold rejects everything lo
 tokens; it measures length, not certainty. The geometric mean is length-invariant.
 
 **Rejected.** Sequence probability (the obvious reading of the brief, and wrong). Min-token
-probability alone (too noisy — one rare token tanks a good answer); it's retained as a *secondary*
-signal, not the headline.
+probability *as the headline* (too noisy — one rare token tanks a good answer); `min_prob` is
+retained in the feature vector as a secondary signal, alongside `p10_prob`, which is the robust form
+of the same "weakest link" idea.
 
 **Revisit if.** Eval shows another metric in the feature vector dominating `geo_mean` in the fitted
 calibrator, which would be a reason to change the raw-mode headline.
 
 ## D4 — Ship `raw` mode, earn the 85% later
 
-**Decision.** Two confidence modes. `raw` uses `geo_mean` with thresholds 0.55/0.62. `calibrated`
-(post-eval) maps the feature vector to `P(this tier's answer is as good as the frontier's)` and uses
-0.85 at both gates.
+**Decision.** Two confidence modes. `raw` uses `geo_mean` with per-model thresholds 0.55/0.62.
+`calibrated` (post-eval) maps the feature vector to `P(this tier's answer is as good as the
+frontier's)`, with `TARGET_SMALL=0.92` and `TARGET_LARGE=0.85` — the spec's 85% landing on gate 2,
+the gate that actually spends money.
 
 **Why.** The brief says "escalate below 85% confidence." Raw `geo_mean` on a small model sits around
 0.5–0.75 *even when correct*, because language offers many valid phrasings. Shipping 0.85 against the
@@ -71,19 +73,33 @@ mode the 85% means what the brief intended.
 **Rejected.** Hardcoding 0.85 against the raw metric (broken). Silently substituting a different
 number and calling it 85% (dishonest). Dropping the threshold concept (loses the brief's intent).
 
-**Revisit.** Never collapse the two modes — the distinction is the point.
+**Revisit.** Never collapse the two modes — the distinction is the point. And treat calibration as a
+claim requiring evidence: M6 must show held-out reliability (curve, Brier, ECE per gate) before the
+flip. A fitted model is not a calibrated one, and ~120 prompts is a small sample for a 7-feature fit.
+If reliability doesn't hold, staying in `raw` and reporting that is the correct outcome.
 
-## D5 — One calibrator per gate
+## D5 — One calibrator per gate, and the thresholds are not comparable
 
-**Decision.** Gate 1 and gate 2 get separately fitted parameters in `eval/calibrator.json`.
+**Decision.** Gate 1 (`small`) and gate 2 (`large`) get separately fitted parameters in
+`eval/calibrator.json`. In calibrated mode gate 1's acceptance bar is **higher** than gate 2's
+(0.92 vs 0.85).
 
 **Why.** They're different decisions with different consequences and different feature distributions.
-Gate 1 escalates to something nearly free, so it should be trigger-happy; gate 2 escalates to real
-money, so it should be reluctant. Sharing parameters would be a subtle correctness bug that still
-"works" — the worst kind.
+Sharing parameters would be a subtle correctness bug that still "works" — the worst kind.
+
+The direction matters and is easy to get backwards. Escalating from gate 1 costs ~450 ms and no
+money, so the gateway should escalate *readily* there — which means a **high** bar to accept.
+Escalating from gate 2 costs real money, so it should accept more willingly — a **lower** bar. Gate 1
+is the stricter gate.
+
+**Note on the raw-mode numbers.** `THRESHOLD_SMALL=0.55 < THRESHOLD_LARGE=0.62` does **not** encode
+that policy — it can't, because the two thresholds apply to different models whose `geo_mean`
+distributions differ (the 0.5B scores systematically lower). The ordering is an artifact of the
+models, not a decision. An earlier draft of these docs claimed it expressed the economics, and stated
+the economics backwards on top of that; both errors are corrected here.
 
 **Revisit if.** Eval shows the two fits converging to near-identical parameters, which would suggest
-the tier difference doesn't matter and one model suffices.
+the tier difference doesn't matter and one local model suffices (see D1).
 
 ## D6 — Ollama serves embeddings; no torch
 
@@ -160,8 +176,13 @@ then learn.
 judgment during eval only. Responses cached to `eval/runs/`. Serving never uses it by default.
 
 **Why.** The mock returns canned text — it cannot tell you whether the 3B's answer was actually good.
-Without a real reference the calibrated 85% is decoration. ~120 prompts × 2 calls is a few dollars,
-once. Caching every response means re-fitting calibrators never re-spends.
+Without a real reference the calibrated 85% is decoration. Caching every response means re-fitting
+calibrators never re-spends.
+
+**The judge is a separate provider from the reference** (`EVAL_JUDGE_BASE_URL` / `EVAL_JUDGE_MODEL` /
+`EVAL_JUDGE_API_KEY`, distinct from `FRONTIER_*`), so no model grades its own output. Volume is 1
+reference completion + 1 judge call per local tier = 3 calls per prompt, ~360 across the set. Compute
+the cost from your configured rates before running — the price constants are placeholders, not quotes.
 
 **Rejected.** Hand-labeling (slow, and calibration is only as good as the labels). Using the 3B to
 judge the 0.5B (works for gate 1, but nothing credible judges the top local tier — which is the gate
@@ -184,8 +205,12 @@ GB, and the 0.5B has no llama equivalent (`llama3.2:1b` is 1.32 GB for a weaker 
 all-frontier baseline.
 
 **Why.** Electricity and amortized hardware are real but not meaningfully attributable per request.
-Inventing a number would make the headline figure look more rigorous while being less honest. The
-README states the simplification openly rather than burying it.
+Inventing a number would make the headline figure look more rigorous while being less honest.
+
+**A second assumption rides along and must be disclosed with it:** the baseline charges frontier
+prices for *every* request, cache hits included. It answers "what would this traffic have cost with no
+gateway at all" — the right question — but it does credit cache hits at full frontier price. Both
+assumptions are stated in README.md's "How savings are counted", not left for a reader to infer.
 
 **Revisit if.** Deployed somewhere with metered compute, where per-request local cost is a real number
 rather than an estimate.

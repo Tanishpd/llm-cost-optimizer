@@ -61,6 +61,10 @@ Drop-in OpenAI-compatible. An existing client works unchanged by pointing `base_
 Standard OpenAI `chat.completion`, plus a non-standard `x_hlr` block. Clients that don't know about
 `x_hlr` ignore it; the field is additive and breaks nothing.
 
+> **Illustrative.** Every example payload in this document uses invented values to show field layout.
+> No run has produced them. This one and the `x_hlr` example below are the *same* request, so their
+> numbers line up.
+
 ```json
 {
   "id": "chatcmpl-8f3a1c2e",
@@ -69,11 +73,11 @@ Standard OpenAI `chat.completion`, plus a non-standard `x_hlr` block. Clients th
   "model": "qwen2.5:3b",
   "choices": [{
     "index": 0,
-    "message": {"role": "assistant", "content": "Paris."},
+    "message": {"role": "assistant", "content": "Sunlight refracts as it enters each raindrop, and ..."},
     "finish_reason": "stop",
     "logprobs": null
   }],
-  "usage": {"prompt_tokens": 12, "completion_tokens": 2, "total_tokens": 14},
+  "usage": {"prompt_tokens": 41, "completion_tokens": 156, "total_tokens": 197},
   "x_hlr": { ... }
 }
 ```
@@ -94,10 +98,10 @@ errors. The gateway's product is the visibility into its decisions.
     "path": ["local_small", "local_large"],
     "gates": [
       {"gate": "small", "confidence": 0.41, "threshold": 0.55, "verdict": "escalate",
-       "metrics": {"geo_mean": 0.41, "p10_prob": 0.09, "mean_margin": 0.82,
-                   "mean_norm_entropy": 0.61, "frac_low": 0.38, "n_tokens": 156}},
+       "metrics": {"geo_mean": 0.41, "min_prob": 0.04, "p10_prob": 0.09, "mean_margin": 0.82,
+                   "mean_norm_entropy": 0.61, "frac_low": 0.38, "n_tokens": 94}},
       {"gate": "large", "confidence": 0.68, "threshold": 0.62, "verdict": "accept",
-       "metrics": {"geo_mean": 0.68, "p10_prob": 0.31, "mean_margin": 1.94,
+       "metrics": {"geo_mean": 0.68, "min_prob": 0.18, "p10_prob": 0.31, "mean_margin": 1.94,
                    "mean_norm_entropy": 0.34, "frac_low": 0.11, "n_tokens": 156}}
     ],
     "confidence": 0.68,
@@ -127,11 +131,13 @@ errors. The gateway's product is the visibility into its decisions.
 | `trace_id` | string | Propagated into telemetry and logs. Also returned as the `X-HLR-Trace-Id` header. |
 | `tier` | enum | Who served it: `cache_exact` \| `cache_semantic` \| `local_small` \| `local_large` \| `frontier`. |
 | `path` | array | **Every tier attempted, in order.** A request that walked all three models paid for all three. |
-| `gates` | array | One entry per gate evaluated, with the full metric vector. Empty on cache hits. |
+| `gates` | array | One entry per gate evaluated, with the full metric vector. Empty on cache hits. Gate ids are **`small`** (gate 1, `local_small` → `local_large`) and **`large`** (gate 2, `local_large` → `frontier`). Prose elsewhere calls them "gate 1"/"gate 2"; the wire format uses these ids. |
 | `confidence` | float\|null | The serving tier's score. `null` for cache hits and the frontier tier. |
 | `confidence_mode` | enum | `raw` \| `calibrated`. **Changes what `confidence` means** — see RESEARCH.md §3. |
 | `reason` | string | Human-readable, never an enum. Invariant 2. |
-| `router.*` | object | Entry-tier decision and the features behind it. |
+| `router.entry_tier` | enum | Where the cascade was entered: `local_small` \| `local_large` \| `frontier`. Same vocabulary as `tier`, minus the cache tiers — the router never chooses a cache. |
+| `router.*` | object | Score and the features behind the decision. |
+| `latency_ms.total` | float | Wall-clock. Exceeds the sum of the stage keys by a small amount of gateway overhead — do not assert exact equality. |
 | `cache.*` | object | Which tiers were consulted, similarity score, and which guard rejected a near-hit. |
 | `latency_ms` | object | Per stage plus `total`. Keys present only for stages that ran. |
 | `cost_usd` | float | Actual spend. `0.0` for cache and local tiers. |
@@ -205,15 +211,15 @@ Request: same shape as `/v1/chat/completions` (only `messages` is read).
             "entries": 867},
   "gates": {"small": {"evaluated": 690, "accepted": 511, "escalated": 179, "escalation_rate": 0.259},
             "large": {"evaluated": 239, "accepted": 198, "escalated": 41, "escalation_rate": 0.172}},
-  "cost": {"actual_usd": 0.0891, "baseline_usd": 1.2437,
-           "saved_usd": 1.1546, "saved_pct": 92.8},
+  "cost": {"actual_usd": 0.0859, "baseline_usd": 1.4194,
+           "saved_usd": 1.3335, "saved_pct": 94.0},
   "latency_ms": {"cache_exact": {"p50": 1.1, "p95": 2.4},
                  "cache_semantic": {"p50": 17.8, "p95": 31.2},
                  "local_small": {"p50": 116.0, "p95": 189.0},
                  "local_large": {"p50": 438.0, "p95": 702.0},
                  "frontier": {"p50": 1980.0, "p95": 3110.0},
                  "end_to_end": {"p50": 121.0, "p95": 1840.0}},
-  "tokens": {"in": 48211, "out": 129884},
+  "tokens": {"in": 48211, "out": 129884, "frontier_in": 3104, "frontier_out": 7812},
   "model_loads": {"cold_loads": 7, "mean_load_ms": 1420.0},
   "degraded": []
 }
@@ -223,19 +229,32 @@ Request: same shape as `/v1/chat/completions` (only `messages` is read).
 (`OLLAMA_MAX_LOADED_MODELS=2` means occasional evictions) doesn't silently pollute the latency
 percentiles.
 
+`tokens.in`/`out` are totals across every tier attempted; `frontier_in`/`frontier_out` is the subset
+that was actually billed. Both are needed — the first drives the baseline, the second the actual spend.
+
 The counts must reconcile, and a test should assert it:
 
 ```
-sum(tiers.served)                            == requests
-router.entry.local_small                     == tiers.attempted.local_small
-router.entry.local_large  + gates.small.escalated == tiers.attempted.local_large
-router.entry.frontier     + gates.large.escalated == tiers.attempted.frontier
-gates.X.accepted + gates.X.escalated         == gates.X.evaluated
-cost.baseline_usd − cost.actual_usd          == cost.saved_usd
+sum(tiers.served)                                 == requests
+router.entry.local_small                          == tiers.attempted.local_small
+router.entry.local_large + gates.small.escalated  == tiers.attempted.local_large
+router.entry.frontier    + gates.large.escalated  == tiers.attempted.frontier
+gates.X.accepted         + gates.X.escalated      == gates.X.evaluated
+cost.actual_usd   == frontier_in/1e6 × PRICE_IN + frontier_out/1e6 × PRICE_OUT
+cost.baseline_usd == tokens.in/1e6   × PRICE_IN + tokens.out/1e6   × PRICE_OUT
+cost.baseline_usd − cost.actual_usd               == cost.saved_usd
 ```
 
-Verify against the example above: served sums to 1284 ✓; 60 + 179 = 239 ✓; 15 + 41 = 56 ✓;
-1.2437 − 0.0891 = 1.1546 ✓, and 1.1546 / 1.2437 = 92.8% ✓.
+Against the example, at `PRICE_IN=2.50` / `PRICE_OUT=10.00` per 1M:
+served sums to 1284 ✓; 60 + 179 = 239 ✓; 15 + 41 = 56 ✓;
+actual = 3104/1e6×2.50 + 7812/1e6×10.00 = 0.0859 ✓;
+baseline = 48211/1e6×2.50 + 129884/1e6×10.00 = 1.4194 ✓;
+1.4194 − 0.0859 = 1.3335 ✓, and 1.3335 / 1.4194 = 94.0% ✓.
+
+Note what the baseline assumes: that **every** request, cache hits included, would otherwise have gone
+to the frontier. That's the "what would this traffic cost with no gateway" question, which is the
+useful one — but it does mean cache hits are credited at full frontier price. Stated plainly in the
+README rather than left for a reader to discover.
 
 ---
 
@@ -279,6 +298,11 @@ Errors also carry `x_hlr`, so a failure is as traceable as a success.
             "latency_ms": {"total": 84.2}}
 }
 ```
+
+On errors, `x_hlr` keys are **always present**; fields that never got a value are `null`
+(`tier`, `confidence`) or `0` (`cost_usd`, `tokens_out`), and `gates`/`path` may be empty arrays. The
+example above elides the zero-valued keys for brevity — an implementation must still emit them, per
+Invariant 1.
 
 | Status | `code` | When |
 |---|---|---|
