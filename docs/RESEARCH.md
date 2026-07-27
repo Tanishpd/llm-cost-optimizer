@@ -37,9 +37,12 @@ disk. See the RAM column in §5.
 
 ---
 
-## 2. Ollama exposes logprobs — CONFIRMED
+## 2. Ollama exposes logprobs — CONFIRMED IN SOURCE, pending empirical check (M0)
 
-This was the highest-risk assumption in the project. It is **resolved: logprobs are supported.**
+This was the highest-risk assumption in the project. The Ollama source is unambiguous that logprobs
+are supported. **It has not yet been observed on this machine** — no model has been pulled and the
+server has never been started. M0 exists to close that gap with one curl, and carries a fallback
+(`CONFIDENCE_STRATEGY=self_consistency`) if the check fails.
 
 **Shipped in Ollama v0.12.11.** Release notes: *"Ollama's API and OpenAI-compatible API now support
 log probabilities."* The installed client is **0.30.10**, far past that.
@@ -139,7 +142,7 @@ Ollama gives natural-log probabilities. Let `logprob_i` be the sampled token's l
 ### Why the obvious metric is wrong
 
 Sequence probability `∏ p_i = exp(Σ logprob_i)` **decays exponentially with length**. At a healthy
-per-token `p = 0.9`, a 100-token answer scores `0.9^100 ≈ 2.6e-5`. Any fixed threshold — certainly
+per-token `p = 0.9`, a 100-token answer scores `0.9^100 ≈ 2.7e-5`. Any fixed threshold — certainly
 0.85 — rejects every answer longer than a couple of tokens. It measures length, not certainty.
 
 ### Metrics actually worth computing
@@ -167,17 +170,35 @@ broken while being arithmetically correct.
 - `raw` (default before calibration): `confidence = geo_mean`, thresholds **0.55** (gate 1) and
   **0.62** (gate 2), clearly documented as *not* the same number as the spec's 85%.
 - `calibrated` (after `eval/run_eval.py` runs): fit a logistic/isotonic map from the feature vector
-  `[geo_mean, p10_prob, mean_margin, mean_norm_entropy, frac_low, n_tokens]` to
-  `P(this tier's answer is as good as the frontier answer)`. Then **`CONFIDENCE_THRESHOLD = 0.85`
-  means what the spec intended**: an 85% chance the cheap answer is good enough.
+  `[geo_mean, min_prob, p10_prob, mean_margin, mean_norm_entropy, frac_low, n_tokens]` to
+  `P(this tier's answer is as good as the frontier answer)`. Then **0.85 means what the spec
+  intended**: an 85% chance the cheap answer is good enough.
 
-This is the single most defensible part of the project — the 85% becomes measured, not asserted.
+**Fit one calibrator per gate**, and do not let the two thresholds be compared naively.
 
-**Fit one calibrator per gate.** Gate 1 (0.5B → 3B) and gate 2 (3B → frontier) are different
-decisions with different consequences and different feature distributions, so they must not share
-parameters. Gate 1's escalation is nearly free, which argues for a low bar; gate 2's costs money,
-which argues for a high one. In raw mode that asymmetry is the 0.55/0.62 split; in calibrated mode
-both target 0.85 against separately fitted models, and the asymmetry lives in the fits.
+In **raw** mode the two numbers apply to *different models*, whose `geo_mean` distributions differ —
+a 0.5B scores systematically lower than a 3B on the same prompt. So `0.55 < 0.62` reflects those
+distributions, **not** a policy. The ordering carries no economic meaning, and prose that claims
+otherwise is wrong (an earlier draft of these docs made exactly that error, in the opposite
+direction).
+
+In **calibrated** mode both scores are comparable probabilities, so economics *do* apply — and they
+run the other way from intuition:
+
+| Gate | Escalating costs | Therefore | Target |
+|---|---|---|---|
+| 1 (`small`) | ~450 ms, no money | Escalate readily → **high** acceptance bar | `0.92` |
+| 2 (`large`) | real money | Escalate reluctantly → lower acceptance bar | `0.85` |
+
+Gate 1's bar is *higher* than gate 2's. When the next tier is nearly free, be quick to use it; when
+it costs money, be slow. 0.85 sits on gate 2 — the gate that actually spends — which is where the
+spec's number belongs.
+
+**Calibration is a claim that needs its own evidence.** Fitting a model does not make it calibrated.
+M6 must report held-out reliability (curve, Brier score, ECE per gate under k-fold CV), because ~120
+prompts is a small sample for a 7-feature fit. Flip to `calibrated` **only if** the held-out
+reliability curve tracks the diagonal in the 0.7–0.95 region; otherwise stay in `raw` and say so.
+Claiming "measured, not asserted" without that check would be asserting a different thing.
 
 ### Hard veto (independent of score)
 
@@ -210,10 +231,10 @@ Vector Sets are documented in [PLAN.md](PLAN.md) as an *optional* swap behind th
 
 768-dim `float32` (`nomic-embed-text`) = 3072 bytes/vector.
 
-| Entries | Index RAM | Cosine matmul |
+| Entries | Index RAM | Cosine matmul (calculated, not benchmarked) |
 |---|---|---|
 | 1,000 | 3 MB | 768K MACs — microseconds |
-| 10,000 | 31 MB | 7.7M MACs — well under 1 ms via numpy/BLAS |
+| 10,000 | 31 MB | 7.7M MACs — expected well under 1 ms via numpy/BLAS |
 | 100,000 | 307 MB | ~77M MACs — a few ms; the point where an index starts paying |
 
 A demo cache will not approach 10k entries. Redis stays the source of truth; the process keeps a
@@ -223,10 +244,15 @@ warm numpy matrix and re-syncs on a version counter.
 
 ## 5. Ollama model sizes (exact, from registry manifests)
 
-Sizes are the summed layer bytes from `registry.ollama.ai/v2/library/{model}/manifests/{tag}`.
-Resident RAM ≈ weights + KV cache at `num_ctx=2048`, roughly 1.15× the on-disk size.
+Disk sizes are **exact** — summed layer bytes from
+`registry.ollama.ai/v2/library/{model}/manifests/{tag}`.
 
-| Model | Disk | Resident RAM | Verdict on this machine |
+**The RAM column is an estimate**, roughly 1.15× on-disk to cover the KV cache at `num_ctx=2048`.
+Nothing has been loaded and measured. `scripts/preflight.py` (M0) records actual residency, and this
+table should be updated with real figures once it has. The verdicts follow from the estimate, so
+treat the borderline rows (`phi4-mini`, `qwen3:4b`) as genuinely uncertain rather than settled.
+
+| Model | Disk | Resident RAM (est.) | Verdict on this machine |
 |---|---|---|---|
 | `qwen2.5:0.5b` | 0.40 GB | ~0.5 GB | ✅ **Tier-2a**, the fast first hop |
 | `qwen2.5:1.5b` | 0.99 GB | ~1.1 GB | ✅ middle option |
@@ -341,6 +367,8 @@ miss. UTM's 24 GB is the single biggest win if those VMs are stale.
   `llm/server.go` (raw.githubusercontent.com, `main`)
 - Ollama v0.12.11 release notes (logprobs announcement)
 - Ollama API docs: `docs.ollama.com/api/generate`, `/api/embed`
-- Redis: `modules/vector-sets/README.md` @ 8.2.3, `VADD`/`VSIM` command docs, Redis 8.0 release notes
+- Redis: `VADD`/`VSIM` command docs, Redis 8.0 release notes. Vector-set syntax was read from
+  `modules/vector-sets/README.md` **@ tag 8.2.3**, while the homebrew stable this would install is
+  8.8.1 — re-verify against 8.8.1 before relying on the syntax, though no breaking change is expected.
 - PyPI JSON API for every wheel-availability claim
 - Local measurement for every machine-state claim
