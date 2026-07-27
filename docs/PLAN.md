@@ -1,7 +1,9 @@
 # Build Plan
 
 Read [RESEARCH.md](RESEARCH.md) first — it holds the verified API shapes and hard numbers this plan
-depends on. Read [../CLAUDE.md](../CLAUDE.md) for architecture invariants before writing code.
+depends on. [API.md](API.md) is the HTTP contract these milestones implement. [DECISIONS.md](DECISIONS.md)
+records why each choice was made. Read [../CLAUDE.md](../CLAUDE.md) for architecture invariants before
+writing code.
 
 ## Context
 
@@ -307,7 +309,7 @@ scripts/
   preflight.py         environment checks
   demo.py              five-tier walkthrough
 static/dashboard.html
-docs/{PLAN,RESEARCH}.md
+docs/{PLAN,API,DECISIONS,RESEARCH}.md
 CLAUDE.md  README.md  requirements.txt  requirements-eval.txt  .env.example
 ```
 
