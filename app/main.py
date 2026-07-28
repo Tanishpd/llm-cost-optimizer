@@ -29,7 +29,9 @@ from app.cache.keys import build_key
 from app.config import Settings, get_settings
 from app.costs import TokenUsage, compute_cost, micro_to_usd, price_micro_usd
 from app.providers.base import ProviderTimeout, ProviderUnavailable
+from app.providers.frontier import FrontierProvider
 from app.providers.ollama import OllamaProvider
+from app.cascade import build_tiers, entry_index, execute
 from app.router.policy import decide
 from app.telemetry import RequestRecord, Telemetry
 from app.schemas import (
@@ -40,6 +42,7 @@ from app.schemas import (
     ErrorDetail,
     ErrorResponse,
     HealthResponse,
+    GateRecord,
     HlrMetadata,
     RouteDecisionResponse,
     RouterRecord,
@@ -88,6 +91,12 @@ async def lifespan(app: FastAPI):
         redis, ttl_local=settings.cache_ttl_local, ttl_frontier=settings.cache_ttl_frontier
     )
     app.state.telemetry = Telemetry(redis)
+    app.state.frontier = FrontierProvider(
+        client,
+        base_url=settings.frontier_base_url,
+        api_key=settings.frontier_api_key,
+        timeout_s=settings.frontier_timeout_s,
+    )
 
     reachable, detail = await ollama.health()
     logger.info("ollama: %s (%s)", "up" if reachable else "DOWN", detail)
@@ -129,6 +138,10 @@ def _exact_cache(request: Request) -> ExactCache:
 
 def _telemetry(request: Request) -> Telemetry:
     return request.app.state.telemetry
+
+
+def _frontier(request: Request) -> FrontierProvider:
+    return request.app.state.frontier
 
 
 @app.middleware("http")
@@ -283,63 +296,77 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
                 },
             )
 
-    if tier == "frontier":
-        # The frontier provider arrives in M4; until then say so plainly rather
-        # than pretending or 500ing.
-        return _error(
-            status=501,
-            code="tier_not_implemented",
-            error_type="not_implemented",
-            message=(
-                "The router selected the frontier tier, which is not wired up until M4. "
-                f"Router said: {router_record.reason}. "
-                "Use gateway:small or gateway:large to force a local tier."
-            ),
-            trace_id=trace_id,
-            degraded=degraded,
-            started=started,
-        )
-
+    # ---- the cascade -----------------------------------------------------
+    # Walk the tier chain from the router's entry point. Each tier's gate
+    # decides whether its answer stands or the walk continues.
     messages = [m.model_dump() for m in body.messages]
-    try:
-        completion = await ollama.chat(
-            model=model,
-            messages=messages,
+    tiers = build_tiers(
+        small_model=settings.small_model,
+        large_model=settings.large_model,
+        frontier_model=settings.frontier_model,
+        threshold_small=settings.threshold_for("small"),
+        threshold_large=settings.threshold_for("large"),
+    )
+
+    async def run_local(model_name: str, msgs: list[dict[str, str]]) -> Any:
+        return await ollama.chat(
+            model=model_name,
+            messages=msgs,
             temperature=body.temperature,
             top_p=body.top_p,
             max_tokens=body.max_tokens,
             logprobs=True,
             top_logprobs=settings.top_logprobs,
         )
-    except ProviderUnavailable as exc:
-        degraded.append("ollama_unavailable")
-        return _error(
-            status=503,
-            code="all_tiers_down",
-            error_type="upstream_unavailable",
-            message=f"{exc}{f' — {exc.fix}' if exc.fix else ''}",
-            trace_id=trace_id,
-            degraded=degraded,
-            started=started,
-            path=[tier],
-        )
-    except ProviderTimeout as exc:
-        degraded.append("ollama_timeout")
-        return _error(
-            status=504,
-            code="upstream_timeout",
-            error_type="upstream_timeout",
-            message=str(exc),
-            trace_id=trace_id,
-            degraded=degraded,
-            started=started,
-            path=[tier],
+
+    async def run_frontier(model_name: str, msgs: list[dict[str, str]]) -> Any:
+        return await _frontier(request).chat(
+            model=model_name,
+            messages=msgs,
+            temperature=body.temperature,
+            top_p=body.top_p,
+            max_tokens=body.max_tokens,
         )
 
-    latency[tier] = completion.latency_ms
-    if completion.was_cold_load:
-        # Recorded separately so it doesn't distort the tier's latency stats.
-        latency["model_load"] = completion.load_ms
+    # A forced tier pins the walk to exactly that rung: no gate, no escalation.
+    # The escape hatch exists to benchmark one tier in isolation.
+    start = entry_index(tiers, tier)
+    walk = tiers[start : start + 1] if body.forced_tier else tiers
+
+    outcome = await execute(
+        walk,
+        start=0 if body.forced_tier else start,
+        messages=messages,
+        runners={
+            "local_small": run_local,
+            "local_large": run_local,
+            "frontier": run_frontier,
+        },
+        confidence_mode=settings.confidence_mode,
+    )
+
+    latency.update(outcome.latency_ms)
+    degraded.extend(outcome.degraded)
+
+    # Checked directly rather than via `outcome.served` so the type narrows.
+    if outcome.completion is None or outcome.tier is None:
+        exc = outcome.error
+        is_timeout = isinstance(exc, ProviderTimeout)
+        latency["total"] = round((time.perf_counter() - started) * 1000, 1)
+        return _error(
+            status=504 if is_timeout else 503,
+            code="upstream_timeout" if is_timeout else "all_tiers_down",
+            error_type="upstream_timeout" if is_timeout else "upstream_unavailable",
+            message=outcome.reason
+            + (f" — {exc.fix}" if isinstance(exc, ProviderUnavailable) and exc.fix else ""),
+            trace_id=trace_id,
+            degraded=degraded,
+            started=started,
+            path=list(outcome.path),
+        )
+
+    completion = outcome.completion
+    tier: str = outcome.tier  # the tier that actually served, not the entry point
     latency["total"] = round((time.perf_counter() - started) * 1000, 1)
 
     usage = TokenUsage(completion.tokens_in, completion.tokens_out)
@@ -373,12 +400,30 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
             ),
         )
 
+    # Every gate evaluated on the way, with its full metric vector — this is
+    # how a caller sees *why* the cascade stopped where it did.
+    gate_records = [
+        GateRecord(
+            gate=v.gate,  # type: ignore[arg-type]
+            confidence=round(v.confidence, 6),
+            threshold=v.threshold,
+            verdict=v.verdict,
+            reason=v.reason,
+            metrics=v.metrics.as_dict(),
+        )
+        for v in outcome.gates
+    ]
+
     hlr = HlrMetadata(
         trace_id=trace_id,
-        tier=tier,
-        path=[tier],
+        tier=tier,  # type: ignore[arg-type]
+        # Every tier attempted, in order. A request that walked 0.5B -> 3B ->
+        # frontier paid for all three, and this says so rather than hiding it.
+        path=list(outcome.path),
+        gates=gate_records,
+        confidence=outcome.confidence,
         confidence_mode=settings.confidence_mode,
-        reason=f"cache miss; {router_record.reason}",
+        reason=outcome.reason,
         router=router_record,
         cache=cache_record,
         latency_ms=latency,
@@ -390,14 +435,16 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
         RequestRecord(
             trace_id=trace_id,
             tier=tier,
-            path=[tier],
+            path=list(outcome.path),
             reason=hlr.reason,
             latency_ms=latency,
             tokens_in=usage.tokens_in,
             tokens_out=usage.tokens_out,
             cost_micro_usd=cost.cost_micro_usd,
             baseline_micro_usd=cost.baseline_micro_usd,
-            entry_tier=tier,
+            entry_tier=router_record.entry_tier,
+            confidence=outcome.confidence,
+            gates=[g.model_dump() for g in gate_records],
             cold_load_ms=completion.load_ms if completion.was_cold_load else 0.0,
             degraded=degraded,
             created_at=time.time(),
@@ -476,6 +523,7 @@ async def healthz(request: Request) -> Any:
             models = {}
 
     redis_ok, redis_detail = await _exact_cache(request).ping()
+    frontier_ok, frontier_detail = await _frontier(request).health()
     dependencies = {
         "ollama": DependencyHealth(
             ok=reachable,
@@ -488,9 +536,11 @@ async def healthz(request: Request) -> Any:
             error=None if redis_ok else redis_detail,
             impact=None if redis_ok else "caching disabled; gateway still serving",
         ),
-        # Wired in M4; reported as not-yet-configured rather than silently omitted.
         "frontier": DependencyHealth(
-            ok=False, error="not wired until M4", base_url=settings.frontier_base_url
+            ok=frontier_ok,
+            error=None if frontier_ok else frontier_detail,
+            impact=None if frontier_ok else "escalation unavailable; best local answer returned",
+            base_url=settings.frontier_base_url,
         ),
     }
 
@@ -498,16 +548,16 @@ async def healthz(request: Request) -> Any:
     if not reachable:
         # The only real failure: no model tier can be reached at all.
         status = "unhealthy"
-    elif missing or not redis_ok:
+    elif missing or not redis_ok or not frontier_ok:
         status = "degraded"
     else:
-        status = "degraded"  # frontier still pending until M4
+        status = "ok"
 
     body = HealthResponse(
         status=status,  # type: ignore[arg-type]
         dependencies=dependencies,
         config={
-            "milestone": "M3",
+            "milestone": "M4",
             "confidence_mode": settings.confidence_mode,
             "thresholds": {
                 "small": settings.threshold_for("small"),
@@ -598,11 +648,11 @@ async def flush_cache(request: Request) -> dict[str, Any]:
 async def root() -> dict[str, Any]:
     return {
         "name": "llm-cost-optimizer",
-        "milestone": "M3 — pre-router",
+        "milestone": "M4 — confidence gates + frontier escalation",
         "endpoints": [
             "/v1/chat/completions", "/route", "/healthz", "/metrics", "/metrics/recent",
             "/cache", "/docs",
         ],
-        "note": "The pre-router picks an entry tier; confidence gating and the "
-        "frontier tier land in M4, so a frontier entry currently returns 501.",
+        "note": "Full cascade: exact cache -> pre-router -> qwen2.5:0.5b -> [gate] -> "
+        "qwen2.5:3b -> [gate] -> frontier. Semantic cache lands in M5.",
     }
