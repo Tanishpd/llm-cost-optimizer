@@ -147,9 +147,13 @@ So the gateway ships in two modes:
   bar is deliberately *higher* (0.92): escalating from it costs ~450 ms and no dollars, so when the
   next tier is nearly free you should use it readily.
 
-Whether the calibration is trustworthy is itself something M6 has to demonstrate — held-out
-reliability curves, not just a fit. If it doesn't hold up, the honest outcome is staying in `raw`
-mode and saying so. Full derivation in [docs/RESEARCH.md](docs/RESEARCH.md) §3.
+**M6 has now run, and the honest outcome is `raw` mode.** Gate 1 passed validation (ECE 0.062,
+Brier better than base rate). **Gate 2 failed** — not on calibration, but on *usefulness*: its ECE
+was actually the better of the two (0.047), because a model that predicts the base rate everywhere
+is trivially well-calibrated and carries no information. Brier-against-baseline is what separates
+"calibrated" from "calibrated and useful", and the 3B's confidence didn't clear it on this sample.
+Shipping one measured gate beside one guessed gate would put both behind the same 0.85 label, so
+the gateway stays in `raw`. Full numbers in [RESEARCH.md §3.4](docs/RESEARCH.md). Full derivation in [docs/RESEARCH.md](docs/RESEARCH.md) §3.
 
 **And M0 already found the limit of the raw metric.** Asked when the Treaty of Kadesh was signed
 (really c. 1259 BC, Egypt and the Hittites), `qwen2.5:0.5b` answered *"1956 … between Egypt and
