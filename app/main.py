@@ -26,6 +26,7 @@ from app.config import Settings, get_settings
 from app.costs import TokenUsage, compute_cost, micro_to_usd, price_micro_usd
 from app.providers.base import ProviderTimeout, ProviderUnavailable
 from app.providers.ollama import OllamaProvider
+from app.telemetry import RequestRecord, Telemetry
 from app.schemas import (
     CacheRecord,
     ChatCompletionRequest,
@@ -79,6 +80,7 @@ async def lifespan(app: FastAPI):
     app.state.exact_cache = ExactCache(
         redis, ttl_local=settings.cache_ttl_local, ttl_frontier=settings.cache_ttl_frontier
     )
+    app.state.telemetry = Telemetry(redis)
 
     reachable, detail = await ollama.health()
     logger.info("ollama: %s (%s)", "up" if reachable else "DOWN", detail)
@@ -116,6 +118,10 @@ def _ollama(request: Request) -> OllamaProvider:
 
 def _exact_cache(request: Request) -> ExactCache:
     return request.app.state.exact_cache
+
+
+def _telemetry(request: Request) -> Telemetry:
+    return request.app.state.telemetry
 
 
 @app.middleware("http")
@@ -204,6 +210,22 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
                 cost_usd=0.0,
                 baseline_cost_usd=float(micro_to_usd(hit.baseline_micro_usd)),
                 cost_saved_usd=float(micro_to_usd(hit.baseline_micro_usd)),
+            )
+            await _telemetry(request).record(
+                RequestRecord(
+                    trace_id=trace_id,
+                    tier="cache_exact",
+                    path=["cache_exact"],
+                    reason=hlr.reason,
+                    latency_ms=latency,
+                    tokens_in=hit.tokens_in,
+                    tokens_out=hit.tokens_out,
+                    cost_micro_usd=0,
+                    baseline_micro_usd=hit.baseline_micro_usd,
+                    cache_hit="exact",
+                    degraded=degraded,
+                    created_at=time.time(),
+                )
             )
             response = ChatCompletionResponse.build(
                 content=hit.content,
@@ -318,6 +340,24 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
         latency_ms=latency,
         degraded=degraded,
         **cost.as_dict(),
+    )
+
+    await _telemetry(request).record(
+        RequestRecord(
+            trace_id=trace_id,
+            tier=tier,
+            path=[tier],
+            reason=hlr.reason,
+            latency_ms=latency,
+            tokens_in=usage.tokens_in,
+            tokens_out=usage.tokens_out,
+            cost_micro_usd=cost.cost_micro_usd,
+            baseline_micro_usd=cost.baseline_micro_usd,
+            entry_tier=tier,
+            cold_load_ms=completion.load_ms if completion.was_cold_load else 0.0,
+            degraded=degraded,
+            created_at=time.time(),
+        )
     )
 
     response = ChatCompletionResponse.build(
@@ -441,6 +481,28 @@ async def healthz(request: Request) -> Any:
     return JSONResponse(status_code=503 if status == "unhealthy" else 200, content=body.model_dump())
 
 
+@app.get("/metrics")
+async def metrics(request: Request) -> dict[str, Any]:
+    """Aggregates for the dashboard. O(1) — counters, not a scan over the stream.
+
+    Returns structurally complete zeros when Redis is down, so a dashboard
+    renders "no data" rather than crashing.
+    """
+    return await _telemetry(request).metrics()
+
+
+@app.get("/metrics/recent")
+async def recent_requests(request: Request, count: int = 20) -> dict[str, Any]:
+    """The live request log — newest first."""
+    return {"requests": await _telemetry(request).recent(count=min(max(count, 1), 200))}
+
+
+@app.delete("/metrics")
+async def reset_metrics(request: Request) -> dict[str, Any]:
+    """Clear telemetry. Dev convenience; scoped to the telemetry keys only."""
+    return {"cleared_keys": await _telemetry(request).reset()}
+
+
 @app.delete("/cache")
 async def flush_cache(request: Request) -> dict[str, Any]:
     """Drop every exact-cache entry. Dev convenience — scoped to the
@@ -453,8 +515,10 @@ async def flush_cache(request: Request) -> dict[str, Any]:
 async def root() -> dict[str, Any]:
     return {
         "name": "llm-cost-optimizer",
-        "milestone": "M2 — exact cache",
-        "endpoints": ["/v1/chat/completions", "/healthz", "/cache", "/docs"],
+        "milestone": "M2 — exact cache + telemetry",
+        "endpoints": [
+            "/v1/chat/completions", "/healthz", "/metrics", "/metrics/recent", "/cache", "/docs",
+        ],
         "note": "Routing (M3) and confidence gating (M4) are not wired yet; "
         "cache misses are served by the local_large tier.",
     }
