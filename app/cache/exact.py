@@ -94,10 +94,21 @@ class ExactCache:
 
     async def get(self, key: CacheKey) -> CachedAnswer | None:
         """Look up an answer. Returns None on miss *or* on any Redis failure."""
+        return await self.get_by_digest(key.digest)
+
+    async def get_by_digest(self, digest: str) -> CachedAnswer | None:
+        """Look up by raw digest.
+
+        The semantic tier needs this: it finds a *vector* whose stored
+        `exact_key` points at an answer, and must fetch that answer without
+        reconstructing the original request. A None here means the vector is
+        dangling — its answer has expired — which the caller treats as a miss
+        and cleans up.
+        """
         if self._redis is None:
             return None
         try:
-            raw = await self._redis.get(redis_key(key.digest))
+            raw = await self._redis.get(redis_key(digest))
         except RedisError as exc:
             logger.warning("exact cache read failed, treating as miss: %s", exc)
             self.available = False

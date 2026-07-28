@@ -1,10 +1,9 @@
 """FastAPI gateway — the single entry point.
 
-Current scope (M3): exact cache → pre-router → the chosen local tier.
+The full cascade (M5):
 
-The confidence gates and the frontier provider arrive in M4. Until then a
-request the router sends to `frontier` returns 501 rather than being quietly
-downgraded — saying "not built yet" beats pretending.
+    exact cache → semantic cache → pre-router → local_small →[gate]→
+    local_large →[gate]→ frontier
 
 The `x_hlr` block has carried every field since M1, including the ones that
 were empty then, so each milestone fills fields in rather than changing the
@@ -24,8 +23,10 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 
+from app.cache import guards
 from app.cache.exact import CachedAnswer, ExactCache
 from app.cache.keys import build_key
+from app.cache.semantic import SemanticCache, SemanticHit
 from app.config import Settings, get_settings
 from app.costs import TokenUsage, compute_cost, micro_to_usd, price_micro_usd
 from app.providers.base import ProviderTimeout, ProviderUnavailable
@@ -91,12 +92,23 @@ async def lifespan(app: FastAPI):
         redis, ttl_local=settings.cache_ttl_local, ttl_frontier=settings.cache_ttl_frontier
     )
     app.state.telemetry = Telemetry(redis)
+    app.state.semantic_cache = SemanticCache(
+        redis,
+        threshold=settings.semantic_threshold,
+        max_chars=settings.semantic_max_chars,
+        max_entries=settings.semantic_max_entries,
+        enabled=settings.semantic_enabled,
+    )
     app.state.frontier = FrontierProvider(
         client,
         base_url=settings.frontier_base_url,
         api_key=settings.frontier_api_key,
         timeout_s=settings.frontier_timeout_s,
     )
+
+    # Load the warm replica once at startup rather than on the first request.
+    synced = await app.state.semantic_cache.sync(force=True)
+    logger.info("semantic index: %d vector(s) loaded", app.state.semantic_cache.size if synced else 0)
 
     reachable, detail = await ollama.health()
     logger.info("ollama: %s (%s)", "up" if reachable else "DOWN", detail)
@@ -142,6 +154,10 @@ def _telemetry(request: Request) -> Telemetry:
 
 def _frontier(request: Request) -> FrontierProvider:
     return request.app.state.frontier
+
+
+def _semantic_cache(request: Request) -> SemanticCache:
+    return request.app.state.semantic_cache
 
 
 @app.middleware("http")
@@ -243,58 +259,95 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
             degraded.append("redis_unavailable")
         if hit is not None:
             cache_record.exact_hit = True
-            latency["total"] = round((time.perf_counter() - started) * 1000, 1)
-            hlr = HlrMetadata(
-                trace_id=trace_id,
+            return await _serve_cached(
+                request,
+                hit=hit,
                 tier="cache_exact",
-                path=["cache_exact"],
-                confidence_mode=settings.confidence_mode,
                 reason=f"exact cache hit; answer originally from {hit.tier} ({hit.model})",
-                router=router_record,
-                cache=cache_record,
-                latency_ms=latency,
+                trace_id=trace_id,
+                started=started,
+                latency=latency,
                 degraded=degraded,
-                tokens_in=hit.tokens_in,
-                tokens_out=hit.tokens_out,
-                # A cache hit costs nothing, but the baseline still prices it as
-                # if it had gone to the frontier — that is the "what would this
-                # traffic cost with no gateway" question (D13).
-                cost_usd=0.0,
-                baseline_cost_usd=float(micro_to_usd(hit.baseline_micro_usd)),
-                cost_saved_usd=float(micro_to_usd(hit.baseline_micro_usd)),
+                router_record=router_record,
+                cache_record=cache_record,
+                confidence_mode=settings.confidence_mode,
             )
-            await _telemetry(request).record(
-                RequestRecord(
-                    trace_id=trace_id,
-                    tier="cache_exact",
-                    path=["cache_exact"],
-                    reason=hlr.reason,
-                    latency_ms=latency,
-                    tokens_in=hit.tokens_in,
-                    tokens_out=hit.tokens_out,
-                    cost_micro_usd=0,
-                    baseline_micro_usd=hit.baseline_micro_usd,
-                    cache_hit="exact",
-                    degraded=degraded,
-                    created_at=time.time(),
-                )
+
+        # ---- T1: semantic cache -----------------------------------------
+        # Only on an exact miss, and only for eligible prompts — the guards
+        # short-circuit before the embedding call, so an ineligible request
+        # costs nothing.
+        semantic = _semantic_cache(request)
+        embedding: list[float] | None = None
+        if semantic.enabled:
+            eligible = guards.check_eligible(
+                prompt=body.user_prompt,
+                is_multi_turn=body.is_multi_turn,
+                max_chars=settings.semantic_max_chars,
             )
-            response = ChatCompletionResponse.build(
-                content=hit.content,
-                model=hit.model,
-                tokens_in=hit.tokens_in,
-                tokens_out=hit.tokens_out,
-                hlr=hlr,
-                finish_reason=hit.finish_reason,
-            )
-            return JSONResponse(
-                content=response.model_dump(),
-                headers={
-                    "X-HLR-Tier": "cache_exact",
-                    "X-HLR-Cost-Usd": "0.000000",
-                    "X-HLR-Saved-Usd": f"{hlr.cost_saved_usd:.6f}",
-                },
-            )
+            if not eligible.passed:
+                cache_record.semantic_checked = False
+                cache_record.guard_rejected = eligible.rejected_by
+            else:
+                sem_started = time.perf_counter()
+                try:
+                    vectors = await ollama.embed(
+                        model=settings.embed_model,
+                        texts=SemanticCache.prefix(body.user_prompt),
+                    )
+                    embedding = vectors[0]
+                except (ProviderUnavailable, ProviderTimeout) as exc:
+                    # The embedder failing disables this tier for the request
+                    # and nothing more — invariant 4.
+                    logger.warning("embedder unavailable, skipping semantic tier: %s", exc)
+                    degraded.append("embedder_unavailable")
+
+                if embedding is not None:
+                    outcome = await semantic.lookup(
+                        embedding=embedding,
+                        prompt=body.user_prompt,
+                        key=key,
+                        is_multi_turn=body.is_multi_turn,
+                    )
+                    latency["cache_semantic"] = round(
+                        (time.perf_counter() - sem_started) * 1000, 1
+                    )
+                    cache_record.semantic_checked = True
+                    if isinstance(outcome, SemanticHit):
+                        cache_record.similarity = round(outcome.similarity, 4)
+                        # A high cosine says the *questions* match. The stored
+                        # answer must still exist and have been produced under
+                        # the same sampling params.
+                        stored = await cache.get_by_digest(outcome.exact_key)
+                        if stored is None:
+                            # Dangling vector: its answer expired. Drop it so it
+                            # cannot keep producing misses.
+                            await semantic.drop(outcome.entry_id)
+                        else:
+                            cache_record.semantic_hit = True
+                            await semantic.touch(outcome.entry_id)
+                            return await _serve_cached(
+                                request,
+                                hit=stored,
+                                tier="cache_semantic",
+                                reason=(
+                                    f"semantic cache hit at cosine {outcome.similarity:.4f} "
+                                    f"(threshold {settings.semantic_threshold}); matched "
+                                    f"{outcome.prompt[:60]!r}, originally from {stored.tier}"
+                                ),
+                                trace_id=trace_id,
+                                started=started,
+                                latency=latency,
+                                degraded=degraded,
+                                router_record=router_record,
+                                cache_record=cache_record,
+                                confidence_mode=settings.confidence_mode,
+                            )
+                    else:
+                        cache_record.similarity = (
+                            round(outcome.similarity, 4) if outcome.similarity is not None else None
+                        )
+                        cache_record.guard_rejected = outcome.guard_rejected
 
     # ---- the cascade -----------------------------------------------------
     # Walk the tier chain from the router's entry point. Each tier's gate
@@ -399,6 +452,16 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
                 },
             ),
         )
+        # Index the prompt so future rewordings can find this answer. Reuses
+        # the embedding computed during the T1 lookup — no second embed call.
+        if embedding is not None:
+            await _semantic_cache(request).store(
+                embedding=embedding,
+                prompt=body.user_prompt,
+                key=key,
+                is_multi_turn=body.is_multi_turn,
+                ttl=_exact_cache(request).ttl_for(tier),
+            )
 
     # Every gate evaluated on the way, with its full metric vector — this is
     # how a caller sees *why* the cascade stopped where it did.
@@ -445,6 +508,11 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
             entry_tier=router_record.entry_tier,
             confidence=outcome.confidence,
             gates=[g.model_dump() for g in gate_records],
+            # A guard rejection means the *model* served, so it is recorded
+            # here rather than on the cache path. Without this, over-
+            # conservative guards would be invisible in /metrics — which is the
+            # one place they are supposed to be measurable.
+            guard_rejected=cache_record.guard_rejected,
             cold_load_ms=completion.load_ms if completion.was_cold_load else 0.0,
             degraded=degraded,
             created_at=time.time(),
@@ -465,6 +533,79 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
             "X-HLR-Tier": tier,
             "X-HLR-Cost-Usd": f"{hlr.cost_usd:.6f}",
             "X-HLR-Saved-Usd": f"{hlr.cost_saved_usd:.6f}",
+        },
+    )
+
+
+async def _serve_cached(
+    request: Request,
+    *,
+    hit: CachedAnswer,
+    tier: str,
+    reason: str,
+    trace_id: str,
+    started: float,
+    latency: dict[str, float],
+    degraded: list[str],
+    router_record: RouterRecord,
+    cache_record: CacheRecord,
+    confidence_mode: str,
+) -> JSONResponse:
+    """Return a cached answer. Shared by T0 and T1 so the two tiers cannot
+    drift apart in what they report."""
+    latency["total"] = round((time.perf_counter() - started) * 1000, 1)
+    saved = float(micro_to_usd(hit.baseline_micro_usd))
+    hlr = HlrMetadata(
+        trace_id=trace_id,
+        tier=tier,  # type: ignore[arg-type]
+        path=[tier],
+        confidence_mode=confidence_mode,  # type: ignore[arg-type]
+        reason=reason,
+        router=router_record,
+        cache=cache_record,
+        latency_ms=latency,
+        degraded=degraded,
+        tokens_in=hit.tokens_in,
+        tokens_out=hit.tokens_out,
+        # A cache hit costs nothing, but the baseline still prices it as if it
+        # had gone to the frontier — the "what would this traffic cost with no
+        # gateway" question (D13).
+        cost_usd=0.0,
+        baseline_cost_usd=saved,
+        cost_saved_usd=saved,
+    )
+    await _telemetry(request).record(
+        RequestRecord(
+            trace_id=trace_id,
+            tier=tier,
+            path=[tier],
+            reason=reason,
+            latency_ms=latency,
+            tokens_in=hit.tokens_in,
+            tokens_out=hit.tokens_out,
+            cost_micro_usd=0,
+            baseline_micro_usd=hit.baseline_micro_usd,
+            entry_tier=router_record.entry_tier,
+            cache_hit="exact" if tier == "cache_exact" else "semantic",
+            guard_rejected=cache_record.guard_rejected,
+            degraded=degraded,
+            created_at=time.time(),
+        )
+    )
+    response = ChatCompletionResponse.build(
+        content=hit.content,
+        model=hit.model,
+        tokens_in=hit.tokens_in,
+        tokens_out=hit.tokens_out,
+        hlr=hlr,
+        finish_reason=hit.finish_reason,
+    )
+    return JSONResponse(
+        content=response.model_dump(),
+        headers={
+            "X-HLR-Tier": tier,
+            "X-HLR-Cost-Usd": "0.000000",
+            "X-HLR-Saved-Usd": f"{saved:.6f}",
         },
     )
 
@@ -557,7 +698,7 @@ async def healthz(request: Request) -> Any:
         status=status,  # type: ignore[arg-type]
         dependencies=dependencies,
         config={
-            "milestone": "M4",
+            "milestone": "M5",
             "confidence_mode": settings.confidence_mode,
             "thresholds": {
                 "small": settings.threshold_for("small"),
@@ -570,6 +711,7 @@ async def healthz(request: Request) -> Any:
                 "embed": settings.embed_model,
             },
             "missing_models": missing,
+            "semantic_index_size": _semantic_cache(request).size,
         },
     )
     return JSONResponse(status_code=503 if status == "unhealthy" else 200, content=body.model_dump())
@@ -638,21 +780,22 @@ async def reset_metrics(request: Request) -> dict[str, Any]:
 
 @app.delete("/cache")
 async def flush_cache(request: Request) -> dict[str, Any]:
-    """Drop every exact-cache entry. Dev convenience — scoped to the
-    `hlr:exact:` prefix, so it cannot touch anything else in the database."""
-    removed = await _exact_cache(request).flush()
-    return {"flushed": removed, "tier": "cache_exact"}
+    """Drop both cache tiers. Dev convenience — scoped to the `hlr:exact:` and
+    `hlr:sem:` prefixes, so it cannot touch telemetry or anything else."""
+    exact = await _exact_cache(request).flush()
+    semantic = await _semantic_cache(request).flush()
+    return {"flushed": {"cache_exact": exact, "cache_semantic": semantic}}
 
 
 @app.get("/")
 async def root() -> dict[str, Any]:
     return {
         "name": "llm-cost-optimizer",
-        "milestone": "M4 — confidence gates + frontier escalation",
+        "milestone": "M5 — full cascade with semantic cache",
         "endpoints": [
             "/v1/chat/completions", "/route", "/healthz", "/metrics", "/metrics/recent",
             "/cache", "/docs",
         ],
-        "note": "Full cascade: exact cache -> pre-router -> qwen2.5:0.5b -> [gate] -> "
-        "qwen2.5:3b -> [gate] -> frontier. Semantic cache lands in M5.",
+        "note": "exact cache -> semantic cache -> pre-router -> qwen2.5:0.5b -> [gate] "
+        "-> qwen2.5:3b -> [gate] -> frontier. Eval harness and dashboard land in M6/M7.",
     }
