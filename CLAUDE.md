@@ -169,6 +169,7 @@ every judgment call toward missing.
 | Add an LLM backend | `app/providers/`, implement `base.Provider` |
 | Cache behaviour | `app/cache/{keys,exact,semantic}.py` |
 | Response shape | `app/schemas.py` |
+| SSE framing | `app/streaming.py` — pure; takes a finished response, yields frames |
 | Metrics / dashboard | `app/telemetry.py`, `app/dashboard.py`, `static/dashboard.html` |
 | Recalibrate the thresholds | `eval/run_eval.py` → writes `eval/calibrator.json` |
 | Auth, request size bounds | `app/security.py` (+ `PUBLIC_PATHS` if adding an unauthenticated route) |
@@ -257,9 +258,9 @@ which is worse than shared but far better than none.
 
 ## Current state
 
-**M0–M10 complete (2026-07-28).** The gateway runs and is hardened: all five tiers, both gates, eval
+**M0–M11 complete (2026-07-28).** The gateway runs and is hardened: all five tiers, both gates, eval
 harness, dashboard, auth, shared rate limiting, circuit breakers, structured logging, container
-image. **573 unit + 8 integration tests**, 97 doc-consistency checks. `python3 scripts/demo.py`
+image, streaming. **635 unit + 9 integration tests**, 107 doc-consistency checks. `python3 scripts/demo.py`
 walks every tier.
 
 **Shipping in `raw` confidence mode, not `calibrated`** — M6 fitted both calibrators and gate
@@ -276,7 +277,7 @@ Measured, and now recorded in RESEARCH.md §3.1–3.2:
   touching the gating logic; it constrains what any single-statistic threshold can achieve.
 
 **Nothing is queued.** Deliberately not built, and each is a real gap rather than an oversight:
-buffer-then-stream (D8), a real-frontier calibration run (needs a key and a few dollars), per-tenant
+a real-frontier calibration run (needs a key and a few dollars), per-tenant
 budgets (auth is per-key but every key draws on the same spend), and a durable audit trail
 (telemetry is a capped stream).
 

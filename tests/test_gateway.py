@@ -292,22 +292,15 @@ def test_forced_frontier_tier_serves(client_factory):
 # --------------------------------------------------------------------------
 
 
-def test_streaming_is_refused_with_a_reason(client_factory):
-    """D8: the gate needs the whole response, so streaming would mean streaming
-    tokens that may be discarded."""
-    c = client_factory(StubOllama())
-    r = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}],
-        "stream": True})
-    assert r.status_code == 400
-    assert r.json()["error"]["code"] == "unsupported_streaming"
-    assert "D8" in r.json()["error"]["message"]
-
-
 def test_error_responses_carry_x_hlr(client_factory):
     """A failure should be as traceable as a success."""
-    c = client_factory(StubOllama())
-    body = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}],
-        "stream": True}).json()
+    c = client_factory(
+        StubOllama(error=ProviderUnavailable("unreachable", fix="Run: ollama serve &")),
+        frontier=StubFrontier(error=ProviderUnavailable("frontier down")),
+    )
+    r = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}]})
+    assert r.status_code == 503
+    body = r.json()
     assert "x_hlr" in body
     assert body["x_hlr"]["trace_id"]
     assert body["x_hlr"]["tier"] is None

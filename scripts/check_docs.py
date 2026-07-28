@@ -122,8 +122,38 @@ def check_no_stale_status() -> None:
                    "not yet observed on this machine", "not yet measured here",
                    "not yet a recorded figure", "M6 answers", "M0 verifies it",
                    # These were superseded by a later measurement.
-                   "not yet at target", "being reclaimed"):
+                   "not yet at target", "being reclaimed",
+                   # M11 shipped streaming. `unsupported_streaming` is an error
+                   # code that no longer exists, so any mention is stale — that
+                   # is why this list checks the identifier rather than prose
+                   # like "returns 400", which a history note may legitimately
+                   # quote when describing what D8 used to say.
+                   "unsupported_streaming",
+                   "No streaming."):
         check(f"no stale status claim: {phrase!r}", phrase not in corpus)
+
+
+def check_streaming_is_not_oversold() -> None:
+    """Streaming here does NOT improve time-to-first-token, and the docs must
+    keep saying so.
+
+    This is the easiest overclaim in the project: "we support streaming" reads
+    as "responses start sooner", and it is the opposite of what buffer-then-
+    stream does. Every doc that describes the feature has to carry the caveat.
+    """
+    # Markdown wraps, and the caveat is a full sentence, so it lands across a
+    # line break as often as not. Normalize whitespace and drop emphasis rather
+    # than forcing the prose to fit a grep.
+    for name in ("README.md", "docs/API.md", "docs/DECISIONS.md"):
+        text = (ROOT / name).read_text()
+        flat = re.sub(r"\s+", " ", text.replace("*", "")).lower()
+        caveat = any(p in flat for p in (
+            "not lower time-to-first-token",
+            "time-to-first-token does not improve",
+            "time-to-first-token is unchanged",
+        ))
+        check(f"{name} does not oversell streaming", "stream" not in flat or caveat,
+              "say plainly that TTFB is unchanged")
 
 
 def check_milestones_are_not_still_pending() -> None:
@@ -221,7 +251,8 @@ def check_promised_files_exist() -> None:
                 "eval/dataset.py", "eval/run_eval.py", "scripts/preflight.py",
                 "scripts/demo.py", "scripts/loadtest.py", "static/dashboard.html",
                 "mock_frontier/main.py", "Dockerfile", "docker-compose.yml",
-                "app/resilience.py", "app/ratelimit.py", "app/logging_setup.py"):
+                "app/resilience.py", "app/ratelimit.py", "app/logging_setup.py",
+                "app/streaming.py"):
         check(f"{rel} exists", (ROOT / rel).exists())
 
 
@@ -246,6 +277,7 @@ def main() -> int:
     check_decisions_are_reversible()
     check_milestones_are_current()
     check_milestones_are_not_still_pending()
+    check_streaming_is_not_oversold()
 
     print()
     if failures:
