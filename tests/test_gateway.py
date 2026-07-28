@@ -10,6 +10,8 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from app.cache.exact import CachedAnswer, ExactCache
+from app.cache.keys import build_key
 from app.config import Settings
 from app.main import app
 from app.providers.base import Completion, ProviderTimeout, ProviderUnavailable
@@ -55,13 +57,24 @@ class StubOllama:
 
 @pytest.fixture
 def client_factory():
-    """Build a TestClient with a stubbed provider, bypassing the real lifespan."""
+    """Build a TestClient with stubbed dependencies, bypassing the real lifespan.
 
-    def _make(stub: StubOllama, settings: Settings | None = None) -> TestClient:
+    Defaults to a cache backed by nothing (`ExactCache(None)`), which is the
+    Redis-unavailable path — so most gateway tests implicitly assert the
+    gateway still works with caching disabled.
+    """
+
+    def _make(
+        stub: StubOllama,
+        settings: Settings | None = None,
+        cache: ExactCache | None = None,
+    ) -> TestClient:
         c = TestClient(app)
         c.app.state.settings = settings or Settings(_env_file=None)
         c.app.state.ollama = stub
         c.app.state.http = None
+        c.app.state.redis = None
+        c.app.state.exact_cache = cache if cache is not None else ExactCache(None)
         return c
 
     return _make
@@ -257,14 +270,17 @@ def test_empty_messages_rejected(client_factory):
 # --------------------------------------------------------------------------
 
 
-def test_healthz_200_when_ollama_up_even_though_redis_pending(client_factory):
-    """Invariant 4: degraded is not unhealthy. Redis isn't wired until M2, and
-    that must not make the gateway look broken."""
-    c = client_factory(StubOllama())
+def test_healthz_200_when_ollama_up_but_redis_down(client_factory):
+    """Invariant 4: degraded is not unhealthy. Redis being unreachable disables
+    caching; it must not make the gateway look broken."""
+    c = client_factory(StubOllama())  # cache defaults to ExactCache(None)
     r = c.get("/healthz")
     assert r.status_code == 200
-    assert r.json()["status"] == "degraded"
-    assert r.json()["dependencies"]["ollama"]["ok"] is True
+    body = r.json()
+    assert body["status"] == "degraded"
+    assert body["dependencies"]["ollama"]["ok"] is True
+    assert body["dependencies"]["redis"]["ok"] is False
+    assert "still serving" in body["dependencies"]["redis"]["impact"]
 
 
 def test_healthz_503_only_when_no_model_tier_reachable(client_factory):
@@ -290,7 +306,143 @@ def test_healthz_reports_active_thresholds(client_factory):
 
 def test_root_describes_current_milestone(client_factory):
     c = client_factory(StubOllama())
-    assert "M1" in c.get("/").json()["milestone"]
+    assert "M2" in c.get("/").json()["milestone"]
+
+
+# --------------------------------------------------------------------------
+# T0 exact cache, through the full request path
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def live_cache():
+    """A working in-memory cache, reusing the fake from the cache tests."""
+    from tests.test_exact_cache import FakeRedis
+
+    return ExactCache(FakeRedis(), ttl_local=3600, ttl_frontier=86400)
+
+
+def _ask(client, prompt="What is the capital of France?", **extra):
+    return client.post(
+        "/v1/chat/completions", json={"messages": [{"role": "user", "content": prompt}], **extra}
+    )
+
+
+def test_second_identical_request_is_a_cache_hit(client_factory, live_cache):
+    """The M2 demo: same prompt twice, second one never touches the model."""
+    stub = StubOllama()
+    c = client_factory(stub, cache=live_cache)
+
+    first = _ask(c).json()
+    assert first["x_hlr"]["tier"] == "local_large"
+    assert first["x_hlr"]["cache"]["exact_hit"] is False
+
+    second = _ask(c).json()
+    assert second["x_hlr"]["tier"] == "cache_exact"
+    assert second["x_hlr"]["path"] == ["cache_exact"]
+    assert second["x_hlr"]["cache"]["exact_hit"] is True
+    assert second["choices"][0]["message"]["content"] == first["choices"][0]["message"]["content"]
+    assert len(stub.calls) == 1, "the model was called twice — cache did not serve"
+
+
+def test_cache_hit_reports_the_same_savings_as_the_original(client_factory, live_cache):
+    """A hit costs nothing but still credits the baseline, so the savings
+    number doesn't collapse when traffic is cacheable (D13)."""
+    c = client_factory(StubOllama(), cache=live_cache)
+    first = _ask(c).json()["x_hlr"]
+    second = _ask(c).json()["x_hlr"]
+    assert second["cost_usd"] == 0.0
+    assert second["baseline_cost_usd"] == first["baseline_cost_usd"]
+    assert second["cost_saved_usd"] == first["cost_saved_usd"]
+
+
+def test_cache_hit_names_the_originating_tier(client_factory, live_cache):
+    c = client_factory(StubOllama(), cache=live_cache)
+    _ask(c)
+    reason = _ask(c).json()["x_hlr"]["reason"]
+    assert "exact cache hit" in reason
+    assert "local_large" in reason  # where the answer actually came from
+
+
+def test_different_sampling_params_miss(client_factory, live_cache):
+    """Invariant 5, end to end: temperature 0 and 1.0 are different questions."""
+    stub = StubOllama()
+    c = client_factory(stub, cache=live_cache)
+    _ask(c, temperature=0.0)
+    r = _ask(c, temperature=1.0).json()
+    assert r["x_hlr"]["tier"] == "local_large"
+    assert len(stub.calls) == 2
+
+
+def test_different_tier_misses(client_factory, live_cache):
+    """An answer from the 0.5B must not be served for a 3B request."""
+    stub = StubOllama()
+    c = client_factory(stub, cache=live_cache)
+    c.post("/v1/chat/completions", json={"model": "gateway:small",
+                                         "messages": [{"role": "user", "content": "q"}]})
+    r = c.post("/v1/chat/completions", json={"model": "gateway:large",
+                                             "messages": [{"role": "user", "content": "q"}]})
+    assert r.json()["x_hlr"]["tier"] == "local_large"
+    assert len(stub.calls) == 2
+
+
+def test_whitespace_variants_still_hit(client_factory, live_cache):
+    stub = StubOllama()
+    c = client_factory(stub, cache=live_cache)
+    _ask(c, "What is  2+2?")
+    r = _ask(c, "What is 2+2?")
+    assert r.json()["x_hlr"]["tier"] == "cache_exact"
+    assert len(stub.calls) == 1
+
+
+def test_nocache_bypasses_both_read_and_write(client_factory, live_cache):
+    stub = StubOllama()
+    c = client_factory(stub, cache=live_cache)
+    for _ in range(2):
+        r = c.post("/v1/chat/completions", json={"model": "gateway:nocache",
+                                                 "messages": [{"role": "user", "content": "q"}]})
+        assert r.json()["x_hlr"]["tier"] == "local_large"
+        assert r.json()["x_hlr"]["cache"]["exact_checked"] is False
+    assert len(stub.calls) == 2
+
+
+def test_gateway_serves_normally_when_redis_is_down(client_factory):
+    """Invariant 4: no cache, no problem — just no savings from caching."""
+    stub = StubOllama()
+    c = client_factory(stub)  # ExactCache(None)
+    for _ in range(2):
+        r = _ask(c)
+        assert r.status_code == 200
+        assert r.json()["x_hlr"]["tier"] == "local_large"
+    assert len(stub.calls) == 2
+
+
+def test_cache_lookup_latency_is_recorded(client_factory, live_cache):
+    c = client_factory(StubOllama(), cache=live_cache)
+    _ask(c)
+    latency = _ask(c).json()["x_hlr"]["latency_ms"]
+    assert "cache_exact" in latency
+    assert "local_large" not in latency  # the model never ran
+
+
+def test_flush_endpoint_clears_the_cache(client_factory, live_cache):
+    stub = StubOllama()
+    c = client_factory(stub, cache=live_cache)
+    _ask(c)
+    assert _ask(c).json()["x_hlr"]["tier"] == "cache_exact"
+
+    assert c.delete("/cache").json()["flushed"] == 1
+    assert _ask(c).json()["x_hlr"]["tier"] == "local_large"
+    assert len(stub.calls) == 2
+
+
+def test_cache_hit_headers(client_factory, live_cache):
+    c = client_factory(StubOllama(), cache=live_cache)
+    _ask(c)
+    r = _ask(c)
+    assert r.headers["X-HLR-Tier"] == "cache_exact"
+    assert float(r.headers["X-HLR-Cost-Usd"]) == 0.0
+    assert float(r.headers["X-HLR-Saved-Usd"]) > 0
 
 
 # --------------------------------------------------------------------------

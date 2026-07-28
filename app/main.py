@@ -18,12 +18,16 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from redis.asyncio import Redis
 
+from app.cache.exact import CachedAnswer, ExactCache
+from app.cache.keys import build_key
 from app.config import Settings, get_settings
-from app.costs import TokenUsage, compute_cost, ns_to_ms
+from app.costs import TokenUsage, compute_cost, micro_to_usd, price_micro_usd
 from app.providers.base import ProviderTimeout, ProviderUnavailable
 from app.providers.ollama import OllamaProvider
 from app.schemas import (
+    CacheRecord,
     ChatCompletionRequest,
     ChatCompletionResponse,
     DependencyHealth,
@@ -57,9 +61,24 @@ async def lifespan(app: FastAPI):
         keep_alive=settings.ollama_keep_alive,
     )
 
+    # Redis is optional by design: if it cannot be reached the gateway runs with
+    # caching disabled rather than refusing to start (invariant 4).
+    redis: Redis | None = None
+    try:
+        redis = Redis.from_url(settings.redis_url, socket_connect_timeout=2, decode_responses=True)
+        await redis.ping()
+        logger.info("redis: up at %s", settings.redis_url)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("redis: DOWN (%s) — caching disabled, still serving", exc)
+        redis = None
+
     app.state.settings = settings
     app.state.http = client
     app.state.ollama = ollama
+    app.state.redis = redis
+    app.state.exact_cache = ExactCache(
+        redis, ttl_local=settings.cache_ttl_local, ttl_frontier=settings.cache_ttl_frontier
+    )
 
     reachable, detail = await ollama.health()
     logger.info("ollama: %s (%s)", "up" if reachable else "DOWN", detail)
@@ -75,6 +94,8 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await client.aclose()
+        if redis is not None:
+            await redis.aclose()
 
 
 app = FastAPI(
@@ -91,6 +112,10 @@ def _settings(request: Request) -> Settings:
 
 def _ollama(request: Request) -> OllamaProvider:
     return request.app.state.ollama
+
+
+def _exact_cache(request: Request) -> ExactCache:
+    return request.app.state.exact_cache
 
 
 @app.middleware("http")
@@ -138,6 +163,64 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
 
     tier = body.forced_tier or "local_large"
     model = settings.model_for(tier)
+    cache = _exact_cache(request)
+    cache_record = CacheRecord()
+
+    # ---- T0: exact cache ------------------------------------------------
+    # Checked before routing: a hit makes the routing question moot, and
+    # routing is cheap but not free.
+    key = build_key(
+        prompt=body.user_prompt,
+        model=model,
+        temperature=body.temperature,
+        top_p=body.top_p,
+        max_tokens=body.max_tokens,
+        system_prompt=body.system_prompt,
+    )
+    if not body.bypass_cache:
+        cache_started = time.perf_counter()
+        hit = await cache.get(key)
+        latency["cache_exact"] = round((time.perf_counter() - cache_started) * 1000, 1)
+        cache_record.exact_checked = True
+        if not cache.available:
+            degraded.append("redis_unavailable")
+        if hit is not None:
+            cache_record.exact_hit = True
+            latency["total"] = round((time.perf_counter() - started) * 1000, 1)
+            hlr = HlrMetadata(
+                trace_id=trace_id,
+                tier="cache_exact",
+                path=["cache_exact"],
+                confidence_mode=settings.confidence_mode,
+                reason=f"exact cache hit; answer originally from {hit.tier} ({hit.model})",
+                cache=cache_record,
+                latency_ms=latency,
+                degraded=degraded,
+                tokens_in=hit.tokens_in,
+                tokens_out=hit.tokens_out,
+                # A cache hit costs nothing, but the baseline still prices it as
+                # if it had gone to the frontier — that is the "what would this
+                # traffic cost with no gateway" question (D13).
+                cost_usd=0.0,
+                baseline_cost_usd=float(micro_to_usd(hit.baseline_micro_usd)),
+                cost_saved_usd=float(micro_to_usd(hit.baseline_micro_usd)),
+            )
+            response = ChatCompletionResponse.build(
+                content=hit.content,
+                model=hit.model,
+                tokens_in=hit.tokens_in,
+                tokens_out=hit.tokens_out,
+                hlr=hlr,
+                finish_reason=hit.finish_reason,
+            )
+            return JSONResponse(
+                content=response.model_dump(),
+                headers={
+                    "X-HLR-Tier": "cache_exact",
+                    "X-HLR-Cost-Usd": "0.000000",
+                    "X-HLR-Saved-Usd": f"{hlr.cost_saved_usd:.6f}",
+                },
+            )
 
     if tier == "frontier":
         # The frontier provider arrives in M4; until then say so plainly rather
@@ -202,12 +285,36 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
         price_out_per_m=settings.frontier_price_out,
     )
 
+    # ---- write-through --------------------------------------------------
+    # Every served answer is cached, so the next identical request is a T0 hit.
+    if not body.bypass_cache:
+        await cache.set(
+            key,
+            CachedAnswer(
+                content=completion.content,
+                model=completion.model,
+                tier=tier,
+                tokens_in=usage.tokens_in,
+                tokens_out=usage.tokens_out,
+                baseline_micro_usd=cost.baseline_micro_usd,
+                finish_reason=completion.finish_reason,
+                created_at=time.time(),
+                params={
+                    "temperature": body.temperature,
+                    "top_p": body.top_p,
+                    "max_tokens": body.max_tokens,
+                    "system_hash": key.system_hash,
+                },
+            ),
+        )
+
     hlr = HlrMetadata(
         trace_id=trace_id,
         tier=tier,
         path=[tier],
         confidence_mode=settings.confidence_mode,
-        reason=f"M1 skeleton: all requests served by {tier} ({model}); routing lands in M3",
+        reason=f"M2: cache miss, served by {tier} ({model}); routing lands in M3",
+        cache=cache_record,
         latency_ms=latency,
         degraded=degraded,
         **cost.as_dict(),
@@ -284,6 +391,7 @@ async def healthz(request: Request) -> Any:
         except Exception:  # noqa: BLE001
             models = {}
 
+    redis_ok, redis_detail = await _exact_cache(request).ping()
     dependencies = {
         "ollama": DependencyHealth(
             ok=reachable,
@@ -291,9 +399,12 @@ async def healthz(request: Request) -> Any:
             error=None if reachable else detail,
             models=models or None,
         ),
-        # Wired in M2 and M4 respectively; reported as not-yet-configured
-        # rather than silently omitted.
-        "redis": DependencyHealth(ok=False, error="not wired until M2", impact="caching disabled"),
+        "redis": DependencyHealth(
+            ok=redis_ok,
+            error=None if redis_ok else redis_detail,
+            impact=None if redis_ok else "caching disabled; gateway still serving",
+        ),
+        # Wired in M4; reported as not-yet-configured rather than silently omitted.
         "frontier": DependencyHealth(
             ok=False, error="not wired until M4", base_url=settings.frontier_base_url
         ),
@@ -301,17 +412,18 @@ async def healthz(request: Request) -> Any:
 
     missing = [m for m, present in models.items() if not present]
     if not reachable:
+        # The only real failure: no model tier can be reached at all.
         status = "unhealthy"
-    elif missing:
+    elif missing or not redis_ok:
         status = "degraded"
     else:
-        status = "degraded"  # redis/frontier still pending in M1
+        status = "degraded"  # frontier still pending until M4
 
     body = HealthResponse(
         status=status,  # type: ignore[arg-type]
         dependencies=dependencies,
         config={
-            "milestone": "M1",
+            "milestone": "M2",
             "confidence_mode": settings.confidence_mode,
             "thresholds": {
                 "small": settings.threshold_for("small"),
@@ -329,12 +441,20 @@ async def healthz(request: Request) -> Any:
     return JSONResponse(status_code=503 if status == "unhealthy" else 200, content=body.model_dump())
 
 
+@app.delete("/cache")
+async def flush_cache(request: Request) -> dict[str, Any]:
+    """Drop every exact-cache entry. Dev convenience — scoped to the
+    `hlr:exact:` prefix, so it cannot touch anything else in the database."""
+    removed = await _exact_cache(request).flush()
+    return {"flushed": removed, "tier": "cache_exact"}
+
+
 @app.get("/")
 async def root() -> dict[str, Any]:
     return {
         "name": "llm-cost-optimizer",
-        "milestone": "M1 — skeleton gateway",
-        "endpoints": ["/v1/chat/completions", "/healthz", "/docs"],
+        "milestone": "M2 — exact cache",
+        "endpoints": ["/v1/chat/completions", "/healthz", "/cache", "/docs"],
         "note": "Routing (M3) and confidence gating (M4) are not wired yet; "
-        "all requests are served by the local_large tier.",
+        "cache misses are served by the local_large tier.",
     }
