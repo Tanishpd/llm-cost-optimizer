@@ -105,7 +105,7 @@ def test_response_names_the_serving_model_not_gateway(client_factory):
     """Self-describing in logs: you asked "gateway", you get told what ran."""
     c = client_factory(StubOllama())
     r = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}]})
-    assert r.json()["model"] == "qwen2.5:3b"
+    assert r.json()["model"] == "qwen2.5:0.5b"  # short prompt -> router picks small
 
 
 def test_every_response_carries_x_hlr(client_factory):
@@ -140,7 +140,7 @@ def test_latency_breakdown_is_reported(client_factory):
     """
     c = client_factory(StubOllama())
     latency = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}]}).json()["x_hlr"]["latency_ms"]
-    assert latency["local_large"] == pytest.approx(120.0)  # from the stub
+    assert latency["local_small"] == pytest.approx(120.0)  # from the stub
     assert "total" in latency
     assert latency["total"] >= 0.0
     assert "model_load" not in latency  # warm stub, so no cold-load key
@@ -148,19 +148,19 @@ def test_latency_breakdown_is_reported(client_factory):
 
 def test_cold_load_recorded_separately_from_tier_latency(client_factory):
     """Cold-start must not distort the tier's latency stats."""
-    cold = Completion(content="x", model="qwen2.5:3b", tokens_in=1, tokens_out=1,
+    cold = Completion(content="x", model="qwen2.5:0.5b", tokens_in=1, tokens_out=1,
                       latency_ms=2100.0, load_ms=1957.6)
     c = client_factory(StubOllama(completion=cold))
     latency = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}]}).json()["x_hlr"]["latency_ms"]
     assert latency["model_load"] == pytest.approx(1957.6)
-    assert "local_large" in latency
+    assert "local_small" in latency
 
 
 def test_headers_expose_tier_and_cost(client_factory):
     """So a proxy or log pipeline can route on them without parsing the body."""
     c = client_factory(StubOllama())
     r = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}]})
-    assert r.headers["X-HLR-Tier"] == "local_large"
+    assert r.headers["X-HLR-Tier"] == "local_small"
     assert "X-HLR-Trace-Id" in r.headers
     assert float(r.headers["X-HLR-Cost-Usd"]) == 0.0
     assert float(r.headers["X-HLR-Saved-Usd"]) > 0
@@ -204,7 +204,7 @@ def test_trace_id_is_honoured_when_supplied(client_factory):
 
 
 @pytest.mark.parametrize("model,expected", [
-    ("gateway", "qwen2.5:3b"),
+    ("gateway", "qwen2.5:0.5b"),  # short prompt -> router picks small
     ("gateway:small", "qwen2.5:0.5b"),
     ("gateway:large", "qwen2.5:3b"),
 ])
@@ -311,7 +311,7 @@ def test_healthz_reports_active_thresholds(client_factory):
 
 def test_root_describes_current_milestone(client_factory):
     c = client_factory(StubOllama())
-    assert "M2" in c.get("/").json()["milestone"]
+    assert "M3" in c.get("/").json()["milestone"]
 
 
 # --------------------------------------------------------------------------
@@ -339,7 +339,7 @@ def test_second_identical_request_is_a_cache_hit(client_factory, live_cache):
     c = client_factory(stub, cache=live_cache)
 
     first = _ask(c).json()
-    assert first["x_hlr"]["tier"] == "local_large"
+    assert first["x_hlr"]["tier"] == "local_small"
     assert first["x_hlr"]["cache"]["exact_hit"] is False
 
     second = _ask(c).json()
@@ -366,7 +366,7 @@ def test_cache_hit_names_the_originating_tier(client_factory, live_cache):
     _ask(c)
     reason = _ask(c).json()["x_hlr"]["reason"]
     assert "exact cache hit" in reason
-    assert "local_large" in reason  # where the answer actually came from
+    assert "local_small" in reason  # where the answer actually came from
 
 
 def test_different_sampling_params_miss(client_factory, live_cache):
@@ -375,7 +375,7 @@ def test_different_sampling_params_miss(client_factory, live_cache):
     c = client_factory(stub, cache=live_cache)
     _ask(c, temperature=0.0)
     r = _ask(c, temperature=1.0).json()
-    assert r["x_hlr"]["tier"] == "local_large"
+    assert r["x_hlr"]["tier"] == "local_small"
     assert len(stub.calls) == 2
 
 
@@ -406,7 +406,7 @@ def test_nocache_bypasses_both_read_and_write(client_factory, live_cache):
     for _ in range(2):
         r = c.post("/v1/chat/completions", json={"model": "gateway:nocache",
                                                  "messages": [{"role": "user", "content": "q"}]})
-        assert r.json()["x_hlr"]["tier"] == "local_large"
+        assert r.json()["x_hlr"]["tier"] == "local_small"
         assert r.json()["x_hlr"]["cache"]["exact_checked"] is False
     assert len(stub.calls) == 2
 
@@ -418,7 +418,7 @@ def test_gateway_serves_normally_when_redis_is_down(client_factory):
     for _ in range(2):
         r = _ask(c)
         assert r.status_code == 200
-        assert r.json()["x_hlr"]["tier"] == "local_large"
+        assert r.json()["x_hlr"]["tier"] == "local_small"
     assert len(stub.calls) == 2
 
 
@@ -427,7 +427,7 @@ def test_cache_lookup_latency_is_recorded(client_factory, live_cache):
     _ask(c)
     latency = _ask(c).json()["x_hlr"]["latency_ms"]
     assert "cache_exact" in latency
-    assert "local_large" not in latency  # the model never ran
+    assert "local_small" not in latency  # the model never ran
 
 
 def test_flush_endpoint_clears_the_cache(client_factory, live_cache):
@@ -437,7 +437,7 @@ def test_flush_endpoint_clears_the_cache(client_factory, live_cache):
     assert _ask(c).json()["x_hlr"]["tier"] == "cache_exact"
 
     assert c.delete("/cache").json()["flushed"] == 1
-    assert _ask(c).json()["x_hlr"]["tier"] == "local_large"
+    assert _ask(c).json()["x_hlr"]["tier"] == "local_small"
     assert len(stub.calls) == 2
 
 
@@ -471,7 +471,7 @@ def test_metrics_counts_served_tiers(client_factory, live_cache, live_telemetry)
     m = c.get("/metrics").json()
     assert m["requests"] == 3
     assert m["tiers"]["served"] == {
-        "cache_exact": 2, "cache_semantic": 0, "local_small": 0, "local_large": 1, "frontier": 0
+        "cache_exact": 2, "cache_semantic": 0, "local_small": 1, "local_large": 0, "frontier": 0
     }
     assert sum(m["tiers"]["served"].values()) == m["requests"]  # identity
 
@@ -504,7 +504,7 @@ def test_metrics_recent_log(client_factory, live_cache, live_telemetry):
     recent = c.get("/metrics/recent").json()["requests"]
     assert len(recent) == 2
     assert recent[0]["tier"] == "cache_exact"  # newest first
-    assert recent[1]["tier"] == "local_large"
+    assert recent[1]["tier"] == "local_small"
 
 
 def test_metrics_reset(client_factory, live_cache, live_telemetry):
@@ -558,3 +558,114 @@ def test_live_end_to_end():
     assert hlr["cost_usd"] == 0.0
     assert hlr["cost_saved_usd"] > 0
     assert hlr["latency_ms"]["total"] > 0
+
+
+# --------------------------------------------------------------------------
+# M3: the router picks the tier
+# --------------------------------------------------------------------------
+
+
+def test_router_sends_short_factual_to_small(client_factory):
+    stub = StubOllama()
+    c = client_factory(stub)
+    r = _ask(c, "What is the capital of France?")
+    assert r.json()["x_hlr"]["tier"] == "local_small"
+    assert stub.calls[0]["model"] == "qwen2.5:0.5b"
+
+
+def test_router_sends_reasoning_with_code_to_large(client_factory):
+    stub = StubOllama()
+    c = client_factory(stub)
+    r = _ask(c, "Explain why this deadlocks, step by step:\n```py\nlock.acquire()\nlock.acquire()\n```")
+    assert r.json()["x_hlr"]["tier"] == "local_large"
+    assert stub.calls[0]["model"] == "qwen2.5:3b"
+
+
+def test_long_summarization_stays_local(client_factory):
+    """The expensive failure mode this guard exists to prevent: long != hard."""
+    stub = StubOllama()
+    c = client_factory(stub)
+    r = _ask(c, "Summarize the following article.\n\n" + ("some prose. " * 900))
+    hlr = r.json()["x_hlr"]
+    assert hlr["tier"] != "frontier"
+    assert hlr["router"]["features"]["n_tokens"] > 600  # genuinely long
+
+
+def test_router_record_is_in_x_hlr(client_factory):
+    c = client_factory(StubOllama())
+    router = _ask(c).json()["x_hlr"]["router"]
+    assert router["entry_tier"] == "local_small"
+    assert isinstance(router["score"], float)
+    assert len(router["reason"]) > 20
+    assert "n_tokens" in router["features"]
+
+
+def test_route_latency_is_recorded(client_factory):
+    c = client_factory(StubOllama())
+    assert "route" in _ask(c).json()["x_hlr"]["latency_ms"]
+
+
+def test_forced_tier_overrides_router_and_says_so(client_factory):
+    """The escape hatch should be visible in the metadata, not silent."""
+    c = client_factory(StubOllama())
+    r = c.post("/v1/chat/completions", json={
+        "model": "gateway:large", "messages": [{"role": "user", "content": "2+2?"}]})
+    router = r.json()["x_hlr"]["router"]
+    assert router["entry_tier"] == "local_large"
+    assert "forced" in router["reason"]
+    assert "local_small" in router["reason"]  # what the router would have chosen
+
+
+def test_frontier_entry_returns_501_naming_the_router_reason(client_factory):
+    """Until M4: honest refusal, and it explains why it was headed there."""
+    c = client_factory(StubOllama())
+    r = _ask(c, "Prove that every finite integral domain is a field. Walk me through "
+                "step by step, explain why each lemma holds, discuss trade-offs of the "
+                "alternative proofs. What if the ring were infinite? How would you "
+                "generalize?\n```\nR = Z/pZ\n```")
+    assert r.status_code == 501
+    assert "frontier" in r.json()["error"]["message"]
+    assert "hardness signals" in r.json()["error"]["message"]
+
+
+# --------------------------------------------------------------------------
+# POST /route
+# --------------------------------------------------------------------------
+
+
+def test_route_endpoint_calls_no_model(client_factory):
+    stub = StubOllama()
+    c = client_factory(stub)
+    r = c.post("/route", json={"messages": [{"role": "user", "content": "What is 2+2?"}]})
+    assert r.status_code == 200
+    assert stub.calls == [], "the router endpoint called a model"
+
+
+def test_route_endpoint_returns_decision_and_features(client_factory):
+    c = client_factory(StubOllama())
+    body = c.post("/route", json={
+        "messages": [{"role": "user", "content": "What is the capital of France?"}]}).json()
+    assert body["entry_tier"] == "local_small"
+    assert 0.0 <= body["score"] <= 1.0
+    assert len(body["reason"]) > 20
+    assert body["features"]["n_tokens"] > 0
+    assert body["cache_preview"]["exact_hit"] is False
+
+
+def test_route_endpoint_previews_a_cache_hit(client_factory, live_cache):
+    c = client_factory(StubOllama(), cache=live_cache)
+    _ask(c, "What is the capital of France?")  # populate
+    body = c.post("/route", json={
+        "messages": [{"role": "user", "content": "What is the capital of France?"}]}).json()
+    assert body["cache_preview"]["exact_checked"] is True
+    assert body["cache_preview"]["exact_hit"] is True
+
+
+def test_route_endpoint_agrees_with_the_chat_path(client_factory):
+    """The preview must not diverge from what a real request would do."""
+    c = client_factory(StubOllama())
+    prompt = "Explain why this deadlocks, step by step:\n```py\nx\n```"
+    routed = c.post("/route", json={"messages": [{"role": "user", "content": prompt}]}).json()
+    served = _ask(c, prompt).json()["x_hlr"]
+    assert routed["entry_tier"] == served["tier"] == served["router"]["entry_tier"]
+    assert routed["score"] == pytest.approx(served["router"]["score"])

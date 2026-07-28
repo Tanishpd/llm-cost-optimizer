@@ -1,10 +1,14 @@
 """FastAPI gateway — the single entry point.
 
-M1 scope: the skeleton. `/v1/chat/completions` is hardwired to the `local_large`
-tier so the request path, cost accounting, and `x_hlr` block can be exercised
-end to end. Caches (M2), routing (M3), and the confidence gates (M4) slot in
-later without changing this file's shape — the response assembly already
-carries every field they will populate.
+Current scope (M3): exact cache → pre-router → the chosen local tier.
+
+The confidence gates and the frontier provider arrive in M4. Until then a
+request the router sends to `frontier` returns 501 rather than being quietly
+downgraded — saying "not built yet" beats pretending.
+
+The `x_hlr` block has carried every field since M1, including the ones that
+were empty then, so each milestone fills fields in rather than changing the
+response contract.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ from app.config import Settings, get_settings
 from app.costs import TokenUsage, compute_cost, micro_to_usd, price_micro_usd
 from app.providers.base import ProviderTimeout, ProviderUnavailable
 from app.providers.ollama import OllamaProvider
+from app.router.policy import decide
 from app.telemetry import RequestRecord, Telemetry
 from app.schemas import (
     CacheRecord,
@@ -36,6 +41,8 @@ from app.schemas import (
     ErrorResponse,
     HealthResponse,
     HlrMetadata,
+    RouteDecisionResponse,
+    RouterRecord,
 )
 
 logger = logging.getLogger("hlr")
@@ -139,9 +146,11 @@ async def add_trace_id(request: Request, call_next):
 async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any:
     """OpenAI-compatible entry point.
 
-    M1: hardwired to `local_large`. The `x_hlr` block is assembled in full even
-    though most of it is empty until M2-M4, because invariant 1 says every
-    response carries it — including the fields that are not populated yet.
+    Order: streaming refusal → pre-router → exact cache → chosen tier.
+
+    The cache lookup needs the tier's model in its key (an answer from the 0.5B
+    must never be served for a 3B request), so routing happens first. That
+    costs microseconds and calls no model.
     """
     settings = _settings(request)
     ollama = _ollama(request)
@@ -167,14 +176,43 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
             started=started,
         )
 
-    tier = body.forced_tier or "local_large"
-    model = settings.model_for(tier)
     cache = _exact_cache(request)
     cache_record = CacheRecord()
 
+    # ---- pre-router ------------------------------------------------------
+    # Cheap heuristics pick an *entry point*; no model is called. The router is
+    # allowed to guess low, because the gates (M4) catch a weak answer. It is
+    # not allowed to guess high casually — frontier entry is ungated.
+    route_started = time.perf_counter()
+    decision = decide(
+        body.user_prompt,
+        system_prompt=body.system_prompt,
+        is_multi_turn=body.is_multi_turn,
+        small_max_tokens=settings.router_small_max_tokens,
+        escalate_min_tokens=settings.router_escalate_min_tokens,
+    )
+    latency["route"] = round((time.perf_counter() - route_started) * 1000, 1)
+
+    # A reserved model name overrides the router entirely — that is what the
+    # escape hatch is for (benchmarking, debugging one tier).
+    tier = body.forced_tier or decision.entry_tier
+    model = settings.model_for(tier)
+    router_record = RouterRecord(
+        entry_tier=tier,
+        score=decision.score,
+        reason=(
+            decision.reason
+            if body.forced_tier is None
+            else f"forced to {tier} by model={body.model!r}; router would have chosen "
+                 f"{decision.entry_tier} ({decision.reason})"
+        ),
+        features=decision.features.as_dict(),
+    )
+
     # ---- T0: exact cache ------------------------------------------------
-    # Checked before routing: a hit makes the routing question moot, and
-    # routing is cheap but not free.
+    # The key needs the tier's model, so this runs after the router — but the
+    # router costs microseconds and calls nothing, so a hit is still served
+    # without touching a model.
     key = build_key(
         prompt=body.user_prompt,
         model=model,
@@ -199,6 +237,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
                 path=["cache_exact"],
                 confidence_mode=settings.confidence_mode,
                 reason=f"exact cache hit; answer originally from {hit.tier} ({hit.model})",
+                router=router_record,
                 cache=cache_record,
                 latency_ms=latency,
                 degraded=degraded,
@@ -251,7 +290,11 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
             status=501,
             code="tier_not_implemented",
             error_type="not_implemented",
-            message="The frontier tier is not wired up until M4. Use gateway:small or gateway:large.",
+            message=(
+                "The router selected the frontier tier, which is not wired up until M4. "
+                f"Router said: {router_record.reason}. "
+                "Use gateway:small or gateway:large to force a local tier."
+            ),
             trace_id=trace_id,
             degraded=degraded,
             started=started,
@@ -335,7 +378,8 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
         tier=tier,
         path=[tier],
         confidence_mode=settings.confidence_mode,
-        reason=f"M2: cache miss, served by {tier} ({model}); routing lands in M3",
+        reason=f"cache miss; {router_record.reason}",
+        router=router_record,
         cache=cache_record,
         latency_ms=latency,
         degraded=degraded,
@@ -463,7 +507,7 @@ async def healthz(request: Request) -> Any:
         status=status,  # type: ignore[arg-type]
         dependencies=dependencies,
         config={
-            "milestone": "M2",
+            "milestone": "M3",
             "confidence_mode": settings.confidence_mode,
             "thresholds": {
                 "small": settings.threshold_for("small"),
@@ -479,6 +523,45 @@ async def healthz(request: Request) -> Any:
         },
     )
     return JSONResponse(status_code=503 if status == "unhealthy" else 200, content=body.model_dump())
+
+
+@app.post("/route")
+async def route_only(body: ChatCompletionRequest, request: Request) -> RouteDecisionResponse:
+    """The routing decision **without calling any chat model** — free and fast.
+
+    Useful for testing policy and for building a labelled dataset for M6.
+
+    One caveat, stated rather than hidden: `cache_preview.exact_hit` costs a
+    Redis lookup. No generation happens either way.
+    """
+    settings = _settings(request)
+    decision = decide(
+        body.user_prompt,
+        system_prompt=body.system_prompt,
+        is_multi_turn=body.is_multi_turn,
+        small_max_tokens=settings.router_small_max_tokens,
+        escalate_min_tokens=settings.router_escalate_min_tokens,
+    )
+    preview = CacheRecord()
+    if not body.bypass_cache:
+        key = build_key(
+            prompt=body.user_prompt,
+            model=settings.model_for(decision.entry_tier),
+            temperature=body.temperature,
+            top_p=body.top_p,
+            max_tokens=body.max_tokens,
+            system_prompt=body.system_prompt,
+        )
+        preview.exact_checked = True
+        preview.exact_hit = await _exact_cache(request).get(key) is not None
+
+    return RouteDecisionResponse(
+        entry_tier=decision.entry_tier,  # type: ignore[arg-type]
+        reason=decision.reason,
+        score=round(decision.score, 4),
+        features=decision.features.as_dict(),
+        cache_preview=preview,
+    )
 
 
 @app.get("/metrics")
@@ -515,10 +598,11 @@ async def flush_cache(request: Request) -> dict[str, Any]:
 async def root() -> dict[str, Any]:
     return {
         "name": "llm-cost-optimizer",
-        "milestone": "M2 — exact cache + telemetry",
+        "milestone": "M3 — pre-router",
         "endpoints": [
-            "/v1/chat/completions", "/healthz", "/metrics", "/metrics/recent", "/cache", "/docs",
+            "/v1/chat/completions", "/route", "/healthz", "/metrics", "/metrics/recent",
+            "/cache", "/docs",
         ],
-        "note": "Routing (M3) and confidence gating (M4) are not wired yet; "
-        "cache misses are served by the local_large tier.",
+        "note": "The pre-router picks an entry tier; confidence gating and the "
+        "frontier tier land in M4, so a frontier entry currently returns 501.",
     }
