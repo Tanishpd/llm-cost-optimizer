@@ -5,7 +5,7 @@ the cheapest one that will actually do the job.
 
 > **Status: M0–M12 complete. The gateway runs, and it's hardened.**
 > All five tiers, both confidence gates, the eval harness and the dashboard are built and working —
-> **685 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
+> **686 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
 > rate
 > limiting, per-tenant budgets, a durable audit trail, circuit breakers, structured
 > logging and a container image are in. Run
@@ -452,7 +452,7 @@ assumption everything else rests on, before anything is built on top of it.
 
 ```
 $ .venv/bin/python -m pytest -q -m "not integration"
-685 passed, 10 deselected in 7.33s
+686 passed, 10 deselected in 3.34s
 
 $ .venv/bin/python scripts/preflight.py
   ✓ python 3.14.6   ✓ venv   ✓ disk 34.1 GB free   ! swap 87%

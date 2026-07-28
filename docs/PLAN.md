@@ -480,6 +480,22 @@ exposed the real hole.
 
     5 requests audited, tenants ['acme','globex'], raw key present: False
 
+**CI found a real bug in the shutdown path**, on 3.14 only, as a flaky rotation
+test. The writer pulls a batch off the queue and then awaits a thread to write
+it; `stop()` cancelled that task. But `asyncio.to_thread` cannot cancel a
+*running* thread — so cancelling there either lost the batch (thread not yet
+started; it was no longer in the queue, so the shutdown flush could not recover
+it) or duplicated it (thread already running, completed anyway, then the
+cancel handler wrote it again). Both were reproduced deterministically by
+making the write slow.
+
+Shutdown now **signals** with a queued sentinel and waits for the writer to
+acknowledge; cancellation is the backstop for a wedged disk, not the mechanism.
+A `_closing` flag covers the case where the queue was full and the sentinel
+could not be enqueued — without it the writer drained everything and then
+blocked on `get()` until the timeout fired, a 5-second stall on exit under
+exactly the sustained load that filled the queue.
+
 ---
 
 ## Configuration surface

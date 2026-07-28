@@ -44,6 +44,14 @@ from typing import Any
 
 logger = logging.getLogger("hlr.audit")
 
+# Queued to tell the writer to finish and exit. A sentinel rather than
+# cancellation because `asyncio.to_thread` cannot cancel a *running* thread:
+# cancelling at that await either loses a batch the writer had already taken
+# off the queue (if the thread had not started) or duplicates it (if it had and
+# then completed anyway). Neither is acceptable in an audit trail, and CI caught
+# the first one on 3.14 as a flaky rotation test.
+_STOP = object()
+
 
 @dataclass
 class AuditStats:
@@ -89,15 +97,18 @@ class AuditLog:
         keep_files: int = 5,
         queue_size: int = 10_000,
         flush_interval_s: float = 1.0,
+        stop_timeout_s: float = 5.0,
         fsync: bool = False,
     ) -> None:
         self.enabled = enabled
         self._dir = Path(directory)
         self._rotation = _Rotation(max_bytes=max_bytes, keep=max(1, keep_files))
         self._flush_interval = flush_interval_s
+        self._stop_timeout_s = stop_timeout_s
         self._fsync = fsync
         self._queue: asyncio.Queue[str] = asyncio.Queue(maxsize=max(1, queue_size))
         self._task: asyncio.Task | None = None
+        self._closing = False
         self._handle = None
         self.stats = AuditStats()
         # PID in the name so concurrent workers never share a file handle.
@@ -130,12 +141,27 @@ class AuditLog:
         return handle
 
     async def stop(self) -> None:
-        """Drain what is queued, then close. Called from the lifespan's finally."""
+        """Drain what is queued, then close.
+
+        Signals rather than cancels, and waits for the writer to acknowledge.
+        Cancellation is the backstop for a wedged disk, not the mechanism —
+        see `_STOP`.
+        """
         if self._task is None:
             return
-        self._task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._task
+        self._closing = True
+        with contextlib.suppress(asyncio.QueueFull):
+            self._queue.put_nowait(_STOP)
+        try:
+            await asyncio.wait_for(self._task, timeout=self._stop_timeout_s)
+        except TimeoutError:
+            # Only here — a write that has not returned in `stop_timeout_s`.
+            # Whatever is still queued is recovered by `_flush_pending` below.
+            logger.warning("audit writer did not finish in %.1fs; cancelling",
+                           self._stop_timeout_s)
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
         self._task = None
         await asyncio.to_thread(self._flush_pending)
         if self._handle is not None:
@@ -169,16 +195,34 @@ class AuditLog:
             return False
 
     async def _drain(self) -> None:
-        """Batch queued lines and write them in a worker thread."""
+        """Batch queued lines and write them in a worker thread.
+
+        Exits when it sees `_STOP`, having first written everything queued
+        ahead of it — so a clean shutdown never loses an accepted record.
+        """
         while True:
             try:
-                first = await self._queue.get()
-                batch = [first]
+                item = await self._queue.get()
+                stopping = item is _STOP
+                batch = [] if stopping else [item]
                 # Opportunistically take everything else already queued: one
                 # write() for N records rather than N.
                 while not self._queue.empty() and len(batch) < 500:
-                    batch.append(self._queue.get_nowait())
-                await asyncio.to_thread(self._write_batch, batch)
+                    nxt = self._queue.get_nowait()
+                    if nxt is _STOP:
+                        stopping = True
+                        break
+                    batch.append(nxt)
+                if batch:
+                    await asyncio.to_thread(self._write_batch, batch)
+                # `_closing` is the belt to `_STOP`'s braces: if the queue was
+                # full at shutdown the sentinel could not be enqueued, and
+                # without this the writer would drain everything and then block
+                # on `get()` until `stop()` timed out and cancelled it — a
+                # five-second stall on exit under exactly the sustained load
+                # that filled the queue.
+                if stopping or (self._closing and self._queue.empty()):
+                    return
                 await asyncio.sleep(0)
             except asyncio.CancelledError:
                 raise
@@ -191,11 +235,15 @@ class AuditLog:
 
     def _flush_pending(self) -> None:
         """Synchronous drain, for shutdown."""
-        batch = []
-        while not self._queue.empty():
-            batch.append(self._queue.get_nowait())
+        batch = [x for x in self._drain_nowait() if x is not _STOP]
         if batch:
             self._write_batch(batch)
+
+    def _drain_nowait(self) -> list:
+        out = []
+        while not self._queue.empty():
+            out.append(self._queue.get_nowait())
+        return out
 
     def _write_batch(self, lines: list[str]) -> None:
         """Write one batch, then rotate if the file has outgrown its limit.

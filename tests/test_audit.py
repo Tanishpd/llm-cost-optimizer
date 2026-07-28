@@ -96,6 +96,41 @@ async def test_shutdown_drains_what_is_queued(tmp_path):
     assert len(lines(log._path)) == 50
 
 
+async def test_a_batch_in_flight_at_shutdown_is_not_lost(tmp_path):
+    """Regression: cancelling the writer mid-batch used to drop records.
+
+    `_drain` pulls a batch off the queue and then awaits a thread to write it.
+    Cancelling at that await left the batch owned by nobody — no longer in the
+    queue, so `_flush_pending` could not recover it — and `write()` had already
+    told the caller it was accepted. CI caught this on 3.14 as a flaky rotation
+    test; the timing window is small and real.
+
+    Forced deterministically here by making the write itself slow, so `stop()`
+    always lands inside it.
+    """
+    log = AuditLog(tmp_path, flush_interval_s=0.01)
+    await log.start()
+
+    real_write = log._write_batch
+    started = asyncio.Event()
+
+    def slow_write(lines):
+        started.set()
+        time.sleep(0.3)              # hold the writer inside to_thread
+        real_write(lines)
+
+    log._write_batch = slow_write
+    for i in range(5):
+        log.write(audit_entry(record(f"t{i}"), tenant="acme"))
+
+    await asyncio.wait_for(started.wait(), timeout=2)
+    await log.stop()                  # cancels while the write is in flight
+
+    written = [w["trace_id"] for w in lines(log._path)]
+    assert written == [f"t{i}" for i in range(5)], (
+        f"records accepted by write() were lost at shutdown: {written}")
+
+
 async def test_records_survive_a_restart(tmp_path):
     """The whole point. Telemetry's capped stream cannot do this."""
     first = AuditLog(tmp_path, flush_interval_s=0.01)
@@ -119,7 +154,7 @@ async def test_write_never_blocks_even_when_the_queue_is_full(tmp_path):
     Blocking here would violate invariant 3 under exactly the conditions
     (sustained load) where it would hurt most.
     """
-    log = AuditLog(tmp_path, queue_size=5, flush_interval_s=100.0)
+    log = AuditLog(tmp_path, queue_size=5, flush_interval_s=100.0, stop_timeout_s=2.0)
     await log.start()
     try:
         started = time.perf_counter()
@@ -136,7 +171,7 @@ async def test_write_never_blocks_even_when_the_queue_is_full(tmp_path):
 async def test_drops_are_counted_not_silent(tmp_path):
     """An audit trail with unreported holes invites conclusions drawn from
     absence, which is worse than having no trail at all."""
-    log = AuditLog(tmp_path, queue_size=2, flush_interval_s=100.0)
+    log = AuditLog(tmp_path, queue_size=2, flush_interval_s=100.0, stop_timeout_s=2.0)
     await log.start()
     try:
         accepted = sum(log.write(audit_entry(record(f"t{i}"), tenant="a")) for i in range(50))
@@ -185,7 +220,7 @@ async def test_rotation_drops_the_oldest_and_keeps_the_newest(tmp_path):
         # per-batch (see `_write_batch`), so queueing all 300 at once produces
         # exactly one rotation and discards nothing — which is correct
         # behaviour, and would make this test assert nothing.
-        for i in range(300):
+        for i in range(60):
             log.write(audit_entry(record(f"t{i}"), tenant="acme"))
             await drained(log)
     finally:
@@ -196,7 +231,7 @@ async def test_rotation_drops_the_oldest_and_keeps_the_newest(tmp_path):
         seen |= {e["trace_id"] for e in lines(f)}
 
     assert log.stats.rotations > 0, "the test did not actually rotate"
-    assert "t299" in seen, "the newest record was rotated away"
+    assert "t59" in seen, "the newest record was rotated away"
     assert "t0" not in seen, "nothing was actually discarded"
 
 

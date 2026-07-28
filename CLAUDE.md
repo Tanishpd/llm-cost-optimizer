@@ -262,7 +262,7 @@ which is worse than shared but far better than none.
 
 **M0–M12 complete (2026-07-28).** The gateway runs and is hardened: all five tiers, both gates, eval
 harness, dashboard, auth, shared rate limiting, circuit breakers, structured logging, container
-image, streaming, per-tenant budgets, a durable audit trail. **685 unit + 10 integration
+image, streaming, per-tenant budgets, a durable audit trail. **686 unit + 10 integration
 tests**, 123 doc-consistency checks. `python3 scripts/demo.py`
 walks every tier.
 
