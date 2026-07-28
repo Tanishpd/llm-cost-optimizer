@@ -12,6 +12,8 @@ response contract.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import time
 import uuid
@@ -28,15 +30,14 @@ from app.cache.exact import CachedAnswer, ExactCache
 from app.cache.keys import build_key
 from app.cache.semantic import SemanticCache, SemanticHit
 from app.cache.singleflight import SingleFlight
+from app.cascade import build_tiers, entry_index, execute
 from app.config import Settings, get_settings
+from app.costs import TokenUsage, compute_cost, micro_to_usd
 from app.dashboard import render as render_dashboard
-from app.costs import TokenUsage, compute_cost, micro_to_usd, price_micro_usd
 from app.providers.base import ProviderTimeout, ProviderUnavailable
 from app.providers.frontier import FrontierProvider
 from app.providers.ollama import OllamaProvider
-from app.cascade import build_tiers, entry_index, execute
 from app.router.policy import decide
-from app.telemetry import RequestRecord, Telemetry
 from app.schemas import (
     CacheRecord,
     ChatCompletionRequest,
@@ -44,12 +45,14 @@ from app.schemas import (
     DependencyHealth,
     ErrorDetail,
     ErrorResponse,
-    HealthResponse,
     GateRecord,
+    HealthResponse,
     HlrMetadata,
     RouteDecisionResponse,
     RouterRecord,
 )
+from app.security import PUBLIC_PATHS, ApiKeyAuth, RateLimiter, RequestLimits
+from app.telemetry import RequestRecord, Telemetry
 
 logger = logging.getLogger("hlr")
 
@@ -95,6 +98,27 @@ async def lifespan(app: FastAPI):
     )
     app.state.telemetry = Telemetry(redis)
     app.state.singleflight = SingleFlight(redis)
+    app.state.auth = ApiKeyAuth(settings.api_key_set, require_auth=settings.require_auth)
+    app.state.rate_limiter = RateLimiter(limit=settings.rate_limit_per_minute)
+    app.state.limits = RequestLimits(
+        max_prompt_chars=settings.max_prompt_chars,
+        max_messages=settings.max_messages,
+        max_output_tokens=settings.max_output_tokens,
+        max_body_bytes=settings.max_body_bytes,
+    )
+
+    if app.state.auth.misconfigured:
+        # Refuse to start rather than serve open traffic while claiming to be
+        # locked down. A misconfiguration that silently disables auth is worse
+        # than a crash, because nothing tells you.
+        raise RuntimeError(
+            "REQUIRE_AUTH=true but GATEWAY_API_KEYS is empty — refusing to start open."
+        )
+    if not app.state.auth.enabled:
+        logger.warning(
+            "AUTH DISABLED: no GATEWAY_API_KEYS set. Anyone who can reach this port can "
+            "spend the frontier budget. Only bind to loopback in this mode."
+        )
     app.state.semantic_cache = SemanticCache(
         redis,
         threshold=settings.semantic_threshold,
@@ -111,7 +135,8 @@ async def lifespan(app: FastAPI):
 
     # Load the warm replica once at startup rather than on the first request.
     synced = await app.state.semantic_cache.sync(force=True)
-    logger.info("semantic index: %d vector(s) loaded", app.state.semantic_cache.size if synced else 0)
+    logger.info("semantic index: %d vector(s) loaded",
+        app.state.semantic_cache.size if synced else 0)
 
     reachable, detail = await ollama.health()
     logger.info("ollama: %s (%s)", "up" if reachable else "DOWN", detail)
@@ -123,9 +148,24 @@ async def lifespan(app: FastAPI):
             load_ms = await ollama.warm(model)
             logger.info("warmed %s (load %.0f ms)", model, load_ms)
 
+    # The rate limiter keeps one bucket per principal. Without periodic
+    # pruning that dict grows forever — a slow leak that only shows up in a
+    # long-running process, which is exactly where it would hurt.
+    async def prune_rate_limiter() -> None:
+        while True:
+            await asyncio.sleep(300)
+            dropped = app.state.rate_limiter.prune()
+            if dropped:
+                logger.debug("pruned %d stale rate-limit bucket(s)", dropped)
+
+    janitor = asyncio.create_task(prune_rate_limiter())
+
     try:
         yield
     finally:
+        janitor.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await janitor
         await client.aclose()
         if redis is not None:
             await redis.aclose()
@@ -165,6 +205,67 @@ def _semantic_cache(request: Request) -> SemanticCache:
 
 def _singleflight(request: Request) -> SingleFlight:
     return request.app.state.singleflight
+
+
+@app.middleware("http")
+async def enforce_access(request: Request, call_next):
+    """Auth, body size, and rate limiting — before any work is done.
+
+    Ordered cheapest-first: an unauthenticated flood should cost a string
+    comparison, not a model call.
+    """
+    path = request.url.path
+    if path in PUBLIC_PATHS or path.startswith("/static"):
+        return await call_next(request)
+
+    auth: ApiKeyAuth = request.app.state.auth
+    result = auth.check(
+        authorization=request.headers.get("authorization"),
+        api_key_header=request.headers.get("x-api-key"),
+    )
+    if not result.ok:
+        return JSONResponse(
+            status_code=401,
+            content={"error": {"message": f"{result.reason}. Send it as "
+                                          "`Authorization: Bearer <key>` or `X-API-Key`.",
+                               "type": "invalid_request_error", "code": "unauthorized"}},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    limits: RequestLimits = request.app.state.limits
+    try:
+        content_length = int(request.headers.get("content-length") or 0) or None
+    except ValueError:
+        content_length = None
+    violation = limits.check_body_size(content_length)
+    if violation is not None:
+        return JSONResponse(
+            status_code=413,
+            content={"error": {"message": violation.message, "type": "invalid_request_error",
+                               "code": violation.code}},
+        )
+
+    # Per-key when authenticated; per client IP when running open, so an open
+    # gateway is still not a free-for-all.
+    principal = result.principal
+    if principal == "anonymous":
+        principal = f"ip:{request.client.host if request.client else 'unknown'}"
+
+    limiter: RateLimiter = request.app.state.rate_limiter
+    allowed, remaining, retry_after = limiter.check(principal)
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={"error": {"message": f"Rate limit exceeded. Retry in {retry_after:.0f}s.",
+                               "type": "rate_limit_error", "code": "rate_limited"}},
+            headers={"Retry-After": str(int(retry_after) + 1)},
+        )
+
+    request.state.principal = principal
+    response = await call_next(request)
+    if remaining >= 0:
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
+    return response
 
 
 @app.middleware("http")
@@ -211,6 +312,22 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
             degraded=degraded,
             started=started,
         )
+
+    limits: RequestLimits = request.app.state.limits
+    total_chars = sum(len(m.content) for m in body.messages)
+    violation = limits.check(messages=body.messages, total_chars=total_chars)
+    if violation is not None:
+        return _error(
+            status=413, code=violation.code, error_type="invalid_request_error",
+            message=violation.message, trace_id=trace_id, degraded=degraded, started=started,
+        )
+
+    # Clamp rather than reject: a caller asking for more than the cap almost
+    # always means "as much as you'll give me". The response says it happened.
+    max_tokens, clamped = limits.clamp_output_tokens(body.max_tokens)
+    body.max_tokens = max_tokens
+    if clamped:
+        degraded.append("max_tokens_clamped")
 
     cache = _exact_cache(request)
     cache_record = CacheRecord()
@@ -757,7 +874,8 @@ async def healthz(request: Request) -> Any:
             "semantic_index_size": _semantic_cache(request).size,
         },
     )
-    return JSONResponse(status_code=503 if status == "unhealthy" else 200, content=body.model_dump())
+    return JSONResponse(status_code=503 if status == "unhealthy" else 200,
+        content=body.model_dump())
 
 
 @app.post("/route")

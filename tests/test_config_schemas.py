@@ -18,7 +18,6 @@ from app.schemas import (
     Message,
 )
 
-
 # --------------------------------------------------------------------------
 # config
 # --------------------------------------------------------------------------
@@ -163,7 +162,8 @@ def test_reserved_models_force_a_tier(model, expected):
 
 
 def test_nocache_bypass_flag():
-    req = ChatCompletionRequest(model="gateway:nocache", messages=[Message(role="user", content="q")])
+    req = ChatCompletionRequest(model="gateway:nocache", messages=[Message(role="user",
+        content="q")])
     assert req.bypass_cache is True
 
 

@@ -167,6 +167,25 @@ every judgment call toward missing.
 - **More tiers:** add a row to `app/cascade.py`. Check the RAM budget first — see the constraints
   above; a fourth resident model does not fit.
 
+## Security posture
+
+The gateway spends money per request, so three surfaces are closed and must
+stay closed:
+
+- **Auth** (`app/security.py`). `GATEWAY_API_KEYS` empty means the gateway runs
+  OPEN — acceptable only on a loopback bind, and startup warns loudly.
+  `REQUIRE_AUTH=true` makes an open start a hard failure. Keys are compared with
+  `secrets.compare_digest`; never add a comparison that short-circuits.
+- **Rate limiting**, per key (per client IP when open). In-process, so under
+  multiple workers the effective limit multiplies by the worker count.
+- **Request bounds**: body size, prompt length, message count, and `max_tokens`.
+  `max_tokens` is *clamped*, not rejected — a caller asking for more almost
+  always means "as much as you'll give me", and the response says it happened.
+
+Only `/healthz` and `/` are public (a load balancer has no credentials).
+`/metrics` exposes cost data and is protected; a test asserts it is not in
+`PUBLIC_PATHS`.
+
 ## Cost of running eval
 
 `eval/run_eval.py` with `EVAL_USE_REAL_FRONTIER=true` spends real money (~120 prompts × 3 calls

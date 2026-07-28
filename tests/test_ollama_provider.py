@@ -14,7 +14,7 @@ import json
 import httpx
 import pytest
 
-from app.providers.base import Completion, Provider, ProviderTimeout, ProviderUnavailable
+from app.providers.base import Provider, ProviderTimeout, ProviderUnavailable
 from app.providers.ollama import OllamaProvider
 
 # A real /api/chat response captured from qwen2.5:0.5b (M0, 2026-07-28).

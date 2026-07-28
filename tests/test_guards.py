@@ -22,7 +22,6 @@ from app.cache.guards import (
     has_negation,
 )
 
-
 # --------------------------------------------------------------------------
 # the named failures from the docs — these must never pass
 # --------------------------------------------------------------------------
@@ -110,7 +109,8 @@ def test_entity_comparison_is_case_insensitive():
 
 
 def test_different_entities_are_rejected():
-    assert check_pair("Who founded Google?", "Who founded Microsoft?").rejected_by == ENTITY_MISMATCH
+    assert check_pair("Who founded Google?",
+        "Who founded Microsoft?").rejected_by == ENTITY_MISMATCH
 
 
 def test_rejection_detail_names_the_difference():

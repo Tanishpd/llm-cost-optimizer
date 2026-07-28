@@ -199,5 +199,8 @@ def _served_reason(
 
     hops = "; ".join(f"{g.gate} gate escalated ({g.reason})" for g in escalations)
     if verdict is not None:
-        return f"served by {tier.name} after {len(escalations)} escalation(s) — {hops} — {verdict.reason}"
+        return (
+        f"served by {tier.name} after {len(escalations)} escalation(s) — "
+        f"{hops} — {verdict.reason}"
+    )
     return f"served by {tier.name} after {len(escalations)} escalation(s) — {hops}"

@@ -10,14 +10,13 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from app.cache.exact import CachedAnswer, ExactCache
+from app.cache.exact import ExactCache
 from app.cache.semantic import SemanticCache
 from app.cache.singleflight import SingleFlight
-from app.cache.keys import build_key
 from app.config import Settings
 from app.main import app
 from app.providers.base import Completion, ProviderTimeout, ProviderUnavailable
-from app.providers.frontier import FrontierProvider
+from app.security import ApiKeyAuth, RateLimiter, RequestLimits
 from app.telemetry import Telemetry
 
 REAL_LOGPROBS = [
@@ -97,6 +96,8 @@ def client_factory():
         telemetry: Telemetry | None = None,
         frontier: StubFrontier | None = None,
         semantic: SemanticCache | None = None,
+        auth: ApiKeyAuth | None = None,
+        limits: RequestLimits | None = None,
     ) -> TestClient:
         c = TestClient(app)
         c.app.state.settings = settings or Settings(_env_file=None)
@@ -117,6 +118,11 @@ def client_factory():
         # No Redis -> every caller wins, which is the correct no-coordination
         # behaviour and keeps these tests about the request path.
         c.app.state.singleflight = SingleFlight(None)
+        # Open + unlimited by default: these tests are about the request path.
+        # The auth/limit behaviour has its own tests below and in test_security.
+        c.app.state.auth = auth if auth is not None else ApiKeyAuth(set())
+        c.app.state.rate_limiter = RateLimiter(limit=0)
+        c.app.state.limits = limits if limits is not None else RequestLimits()
         return c
 
     return _make
@@ -148,7 +154,8 @@ def test_response_names_the_serving_model_not_gateway(client_factory):
 def test_every_response_carries_x_hlr(client_factory):
     """Invariant 1."""
     c = client_factory(StubOllama())
-    hlr = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}]}).json()["x_hlr"]
+    hlr = c.post("/v1/chat/completions", json={"messages": [{"role": "user",
+        "content": "q"}]}).json()["x_hlr"]
     for key in (
         "trace_id", "tier", "path", "gates", "confidence", "confidence_mode", "reason",
         "router", "cache", "latency_ms", "tokens_in", "tokens_out", "cost_usd",
@@ -160,7 +167,8 @@ def test_every_response_carries_x_hlr(client_factory):
 def test_local_tier_is_free_but_baseline_is_not(client_factory):
     """The savings claim, end to end: 41 in / 2 out priced at frontier rates."""
     c = client_factory(StubOllama())
-    hlr = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}]}).json()["x_hlr"]
+    hlr = c.post("/v1/chat/completions", json={"messages": [{"role": "user",
+        "content": "q"}]}).json()["x_hlr"]
     assert hlr["cost_usd"] == 0.0
     assert hlr["baseline_cost_usd"] > 0
     assert hlr["cost_saved_usd"] == hlr["baseline_cost_usd"]
@@ -176,7 +184,8 @@ def test_latency_breakdown_is_reported(client_factory):
     per-tier figure comes from the provider and is asserted exactly.
     """
     c = client_factory(StubOllama())
-    latency = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}]}).json()["x_hlr"]["latency_ms"]
+    latency = c.post("/v1/chat/completions", json={"messages": [{"role": "user",
+        "content": "q"}]}).json()["x_hlr"]["latency_ms"]
     assert latency["local_small"] == pytest.approx(120.0)  # from the stub
     assert "total" in latency
     assert latency["total"] >= 0.0
@@ -188,7 +197,8 @@ def test_cold_load_recorded_separately_from_tier_latency(client_factory):
     cold = Completion(content="x", model="qwen2.5:0.5b", tokens_in=1, tokens_out=1,
                       latency_ms=2100.0, load_ms=1957.6)
     c = client_factory(StubOllama(completion=cold))
-    latency = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}]}).json()["x_hlr"]["latency_ms"]
+    latency = c.post("/v1/chat/completions", json={"messages": [{"role": "user",
+        "content": "q"}]}).json()["x_hlr"]["latency_ms"]
     assert latency["model_load"] == pytest.approx(1957.6)
     assert "local_small" in latency
 
@@ -248,7 +258,8 @@ def test_trace_id_is_honoured_when_supplied(client_factory):
 def test_reserved_models_select_the_tier(client_factory, model, expected):
     stub = StubOllama()
     c = client_factory(stub)
-    c.post("/v1/chat/completions", json={"model": model, "messages": [{"role": "user", "content": "q"}]})
+    c.post("/v1/chat/completions", json={"model": model, "messages": [{"role": "user",
+        "content": "q"}]})
     assert stub.calls[0]["model"] == expected
 
 
@@ -275,7 +286,8 @@ def test_streaming_is_refused_with_a_reason(client_factory):
     """D8: the gate needs the whole response, so streaming would mean streaming
     tokens that may be discarded."""
     c = client_factory(StubOllama())
-    r = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}], "stream": True})
+    r = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}],
+        "stream": True})
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "unsupported_streaming"
     assert "D8" in r.json()["error"]["message"]
@@ -284,7 +296,8 @@ def test_streaming_is_refused_with_a_reason(client_factory):
 def test_error_responses_carry_x_hlr(client_factory):
     """A failure should be as traceable as a success."""
     c = client_factory(StubOllama())
-    body = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}], "stream": True}).json()
+    body = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}],
+        "stream": True}).json()
     assert "x_hlr" in body
     assert body["x_hlr"]["trace_id"]
     assert body["x_hlr"]["tier"] is None
@@ -665,7 +678,10 @@ def test_router_sends_short_factual_to_small(client_factory):
 def test_router_sends_reasoning_with_code_to_large(client_factory):
     stub = StubOllama()
     c = client_factory(stub)
-    r = _ask(c, "Explain why this deadlocks, step by step:\n```py\nlock.acquire()\nlock.acquire()\n```")
+    r = _ask(
+        c,
+        "Explain why this deadlocks, step by step:\n```py\nlock.acquire()\nlock.acquire()\n```",
+    )
     assert r.json()["x_hlr"]["tier"] == "local_large"
     assert stub.calls[0]["model"] == "qwen2.5:3b"
 
@@ -993,3 +1009,114 @@ def test_singleflight_failure_does_not_block_serving(client_factory, live_cache)
     c = client_factory(stub, cache=live_cache)
     c.app.state.singleflight = SingleFlight(SfFakeRedis(fail_on={"set"}))
     assert _ask(c).status_code == 200
+
+
+# --------------------------------------------------------------------------
+# M9: auth, rate limiting, request bounds — through the gateway
+# --------------------------------------------------------------------------
+
+
+def test_protected_endpoints_reject_missing_key(client_factory):
+    c = client_factory(StubOllama(), auth=ApiKeyAuth({"sk-test"}))
+    payload = {"messages": [{"role": "user", "content": "q"}]}
+    for path, method, body in [
+        ("/v1/chat/completions", "post", payload),
+        ("/route", "post", payload),
+        ("/metrics", "get", None),
+        ("/metrics/recent", "get", None),
+        ("/dashboard", "get", None),
+        ("/cache", "delete", None),
+    ]:
+        kwargs = {"json": body} if body is not None else {}
+        r = getattr(c, method)(path, **kwargs)
+        assert r.status_code == 401, f"{path} served without a key"
+
+
+def test_valid_key_is_accepted(client_factory):
+    c = client_factory(StubOllama(), auth=ApiKeyAuth({"sk-test"}))
+    r = c.post("/v1/chat/completions",
+               json={"messages": [{"role": "user", "content": "q"}]},
+               headers={"Authorization": "Bearer sk-test"})
+    assert r.status_code == 200
+
+
+def test_x_api_key_header_also_works(client_factory):
+    c = client_factory(StubOllama(), auth=ApiKeyAuth({"sk-test"}))
+    r = c.post("/v1/chat/completions",
+               json={"messages": [{"role": "user", "content": "q"}]},
+               headers={"X-API-Key": "sk-test"})
+    assert r.status_code == 200
+
+
+def test_health_stays_public_when_auth_is_on(client_factory):
+    """A load balancer has no credentials."""
+    c = client_factory(StubOllama(), auth=ApiKeyAuth({"sk-test"}))
+    assert c.get("/healthz").status_code == 200
+    assert c.get("/").status_code == 200
+
+
+def test_401_carries_a_www_authenticate_header(client_factory):
+    c = client_factory(StubOllama(), auth=ApiKeyAuth({"sk-test"}))
+    r = c.get("/metrics")
+    assert r.headers.get("WWW-Authenticate") == "Bearer"
+
+
+def test_rate_limit_blocks_the_request_over_the_cap(client_factory):
+    c = client_factory(StubOllama())
+    c.app.state.rate_limiter = RateLimiter(limit=2, window_s=60)
+    assert _ask(c).status_code == 200
+    assert _ask(c).status_code == 200
+    r = _ask(c)
+    assert r.status_code == 429
+    assert r.json()["error"]["code"] == "rate_limited"
+    assert int(r.headers["Retry-After"]) >= 1
+
+
+def test_rate_limit_remaining_header(client_factory):
+    c = client_factory(StubOllama())
+    c.app.state.rate_limiter = RateLimiter(limit=5, window_s=60)
+    assert _ask(c).headers["X-RateLimit-Remaining"] == "4"
+
+
+def test_oversized_body_is_rejected_before_any_work(client_factory):
+    stub = StubOllama()
+    c = client_factory(stub, limits=RequestLimits(max_body_bytes=200))
+    r = c.post("/v1/chat/completions",
+               json={"messages": [{"role": "user", "content": "x" * 5000}]})
+    assert r.status_code == 413
+    assert r.json()["error"]["code"] == "request_too_large"
+    assert stub.calls == [], "a model ran despite the request being too large"
+
+
+def test_long_prompt_is_rejected(client_factory):
+    stub = StubOllama()
+    c = client_factory(stub, limits=RequestLimits(max_prompt_chars=100, max_body_bytes=10**7))
+    r = _ask(c, "x" * 500)
+    assert r.status_code == 413
+    assert r.json()["error"]["code"] == "prompt_too_long"
+    assert stub.calls == []
+
+
+def test_too_many_messages_is_rejected(client_factory):
+    c = client_factory(StubOllama(), limits=RequestLimits(max_messages=2, max_body_bytes=10**7))
+    r = c.post("/v1/chat/completions", json={
+        "messages": [{"role": "user", "content": f"m{i}"} for i in range(10)]})
+    assert r.status_code == 413
+
+
+def test_absurd_max_tokens_is_clamped_and_reported(client_factory):
+    """Unbounded max_tokens is an unbounded bill and a request that occupies
+    the only local model for minutes."""
+    stub = StubOllama()
+    c = client_factory(stub, limits=RequestLimits(max_output_tokens=64))
+    r = c.post("/v1/chat/completions", json={
+        "messages": [{"role": "user", "content": "q"}], "max_tokens": 999_999})
+    assert r.status_code == 200
+    assert stub.calls[0]["max_tokens"] == 64
+    assert "max_tokens_clamped" in r.json()["x_hlr"]["degraded"]
+
+
+def test_error_responses_do_not_leak_the_key(client_factory):
+    c = client_factory(StubOllama(), auth=ApiKeyAuth({"sk-supersecret"}))
+    body = c.get("/metrics", headers={"X-API-Key": "wrong"}).text
+    assert "sk-supersecret" not in body

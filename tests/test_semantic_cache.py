@@ -97,25 +97,32 @@ class FakePipeline:
         self.r, self.ops = r, []
 
     def hset(self, key, mapping=None):
-        self.ops.append(("hset", key, mapping)); return self
+        self.ops.append(("hset", key, mapping))
+        return self
 
     def expire(self, key, ttl):
-        self.ops.append(("expire", key, ttl)); return self
+        self.ops.append(("expire", key, ttl))
+        return self
 
     def zadd(self, key, mapping):
-        self.ops.append(("zadd", key, mapping)); return self
+        self.ops.append(("zadd", key, mapping))
+        return self
 
     def incr(self, key):
-        self.ops.append(("incr", key)); return self
+        self.ops.append(("incr", key))
+        return self
 
     def delete(self, key):
-        self.ops.append(("delete", key)); return self
+        self.ops.append(("delete", key))
+        return self
 
     def zrem(self, key, member):
-        self.ops.append(("zrem", key, member)); return self
+        self.ops.append(("zrem", key, member))
+        return self
 
     def hgetall(self, key):
-        self.ops.append(("hgetall", key)); return self
+        self.ops.append(("hgetall", key))
+        return self
 
     async def execute(self):
         self.r._check("execute")
