@@ -344,3 +344,53 @@ def test_validation_report_is_serializable():
 
 def test_thresholds_are_the_documented_ones():
     assert MAX_ECE == 0.10
+
+
+# --------------------------------------------------------------------------
+# report: the sweep metrics
+# --------------------------------------------------------------------------
+
+
+def test_sweep_counts_false_cheap_and_false_expensive():
+    """The two error types are not symmetric: false-cheap serves a wrong
+    answer, false-expensive just wastes money."""
+    from eval.report import sweep
+
+    scores = np.array([0.9, 0.9, 0.2, 0.2])
+    labels = np.array([1.0, 0.0, 1.0, 0.0])  # one right and one wrong on each side
+    row = sweep(scores, labels, [0.5])[0]
+    assert row.accepted == 2
+    assert row.escalated == 2
+    assert row.false_cheap == 1       # accepted the 0.9-scoring wrong answer
+    assert row.false_expensive == 1   # escalated the 0.2-scoring right answer
+
+
+def test_sweep_at_zero_threshold_accepts_everything():
+    from eval.report import sweep
+
+    scores, labels = np.array([0.1, 0.9]), np.array([0.0, 1.0])
+    row = sweep(scores, labels, [0.0])[0]
+    assert row.escalated == 0
+    assert row.false_cheap == 1
+    assert row.false_expensive == 0
+
+
+def test_sweep_at_high_threshold_escalates_everything():
+    """Escalating everything gives perfect quality and zero savings — which is
+    why escalation rate alone is a useless headline."""
+    from eval.report import sweep
+
+    scores, labels = np.array([0.1, 0.9]), np.array([0.0, 1.0])
+    row = sweep(scores, labels, [1.1])[0]
+    assert row.escalated == 2
+    assert row.false_cheap == 0
+    assert row.quality_preserved == 1.0
+
+
+def test_quality_preserved_assumes_escalation_fixes_things():
+    """A documented optimism: reasonable for the frontier, generous for gate
+    small escalating to the 3B."""
+    from eval.report import sweep
+
+    scores, labels = np.array([0.1]), np.array([0.0])  # wrong, and escalated
+    assert sweep(scores, labels, [0.5])[0].quality_preserved == 1.0

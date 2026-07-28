@@ -349,6 +349,69 @@ needs parsing, not lexical sets.
 
 ---
 
+### 3.4 The calibration result (M6, 2026-07-28) — one gate passes, one fails
+
+67 auto-gradable prompts, graded against ground truth (no API spend), both local
+tiers run at `temperature=0`. Calibrators fitted under 5-fold CV, reliability on
+pooled out-of-fold predictions.
+
+| Gate | n | acceptable | ECE | ECE 95% CI upper | Brier | base-rate Brier | Verdict |
+|---|---|---|---|---|---|---|---|
+| `small` (0.5B) | 67 | 82% | 0.062 | 0.163 | **0.131** | 0.147 | **PASS** |
+| `large` (3B) | 67 | 85% | 0.047 | 0.179 | **0.141** | 0.127 | **FAIL** |
+
+**Gate `large` fails on the Brier check, not on ECE** — and that distinction is
+the whole reason the check exists. Its ECE (0.047) is *better* than gate
+`small`'s, because a model that predicts the base rate everywhere is trivially
+well-calibrated. It just carries no information. Brier-against-baseline is what
+separates "calibrated" from "calibrated and useful", and gate `large` is the
+former only.
+
+The raw sweep shows the same thing more starkly. The 3B's `geo_mean` barely
+moves with correctness:
+
+```
+gate large, raw mode          gate small, raw mode
+thresh  escalate%  false-cheap   thresh  escalate%  false-cheap
+  0.40        2%    9 (13%)        0.40        0%   12 (18%)
+  0.62        3%    9 (13%)  <--   0.55       15%    8 (12%)  <-- shipped
+  0.70        3%    9 (13%)        0.70       42%    5 ( 8%)
+  0.90       22%    4 ( 6%)        0.90       81%    0 ( 0%)
+```
+
+Between 0.40 and 0.70, gate `large` escalates 2–3% of requests no matter where
+the threshold sits. **The shipped 0.62 is doing almost nothing.** Gate `small`
+by contrast responds smoothly — its confidence genuinely tracks correctness.
+
+Where calibration helps, it helps a lot. Gate `small` at `TARGET_SMALL=0.92`
+cuts false-cheap from 12% to **2%**:
+
+```
+gate small, calibrated
+thresh  escalate%  false-cheap  quality
+  0.85       48%     2 ( 3%)      97%
+  0.92       57%     1 ( 2%)      98%
+```
+
+**Decision: stay in `raw` mode.** `should_flip()` requires every gate to pass,
+and shipping one measured gate beside one guessed gate would put both behind the
+same 0.85 label. This is a real negative result, not a bug — the validator did
+exactly the job it was built for.
+
+Three caveats on the sample, stated so the numbers are not over-read:
+
+1. **The auto subset is easier than production traffic.** Short factual and
+   arithmetic questions; the 3B scores 85% on them. There is little failure
+   signal to learn from, which is a plausible cause of gate `large`'s flat
+   confidence here rather than a property of the model.
+2. **65 judge-gradable prompts are unlabelled** — the reasoning, summarization
+   and open-ended code prompts, which is exactly where the 3B would be expected
+   to fail more often. Running `--real-frontier` is the natural next step.
+3. `quality_preserved` assumes escalation *fixes* the answer. Reasonable for the
+   frontier tier, optimistic for gate `small` escalating to the 3B.
+
+---
+
 ## 4. Redis: no vector index today, but an upgrade path exists
 
 **Installed Redis 7.2.7 has no modules.** No `FT.CREATE`, no `FT.SEARCH`, no RedisJSON, no vector

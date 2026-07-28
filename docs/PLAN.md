@@ -213,7 +213,13 @@ reaching the frontier — each with its confidence score and reason.
 Demoable: "What's the capital of France?" then "Tell me France's capital city" → `tier:
 "cache_semantic"` with the similarity score. And the Australia/Austria pair correctly *missing*.
 
-### M6 — Eval harness and calibrating the 85%
+### M6 — Eval harness and calibrating the 85% ✅ DONE (2026-07-28)
+
+**Outcome: gate `small` passed, gate `large` failed, gateway stays in `raw` mode.**
+Full numbers in RESEARCH.md §3.4. The free auto-gradable path (67 prompts, ground-truth
+grading, zero spend) produced the result; the 65 judge-gradable prompts remain unlabelled
+and are the natural next step via `--real-frontier`.
+
 
 This is what elevates the project from "works" to "measured".
 
