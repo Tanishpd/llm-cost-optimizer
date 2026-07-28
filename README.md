@@ -1,4 +1,4 @@
-# Autonomous Hybrid LLM Routing Engine & Cost Optimizer
+# LLM Cost Optimizer
 
 An API gateway that sits in front of several models of escalating cost and decides — per request —
 the cheapest one that will actually do the job.
@@ -64,8 +64,11 @@ reasoning markers, arithmetic, attached context — and picks where to *enter* t
 - `local_large` — start at the 3B, skip a hop that would obviously fail
 - `frontier` — clearly hard, skip both local models rather than waste them
 
-From there the **confidence gates** take over. The router's guess is allowed to be wrong: a bad entry
-decision costs latency, not quality, because the gates still catch a weak answer and escalate it.
+From there the **confidence gates** take over. The router's guess is allowed to be wrong in one
+direction only: a *too-low* entry costs latency, because the gates still catch a weak answer and
+escalate it. A *too-high* entry — straight to `frontier` — is ungated spend with no gate to catch it,
+which is why frontier entry is deliberately rare and why the eval measures its precision
+(the false-expensive rate).
 
 **One compatibility gap, on purpose:** `stream: true` returns 400. A gate can't decide whether to
 escalate until the full response and its logprobs exist, so streaming a local answer would mean
@@ -74,7 +77,8 @@ deferred, not overlooked ([D8](docs/DECISIONS.md)).
 
 ## Reading the numbers
 
-Every response carries an `x_hlr` block. *(Illustrative — invented values showing the shape.)*
+Every response carries an `x_hlr` block (**h**ybrid **L**LM **r**outer — the gateway's routing
+metadata). *(Illustrative — invented values showing the shape.)*
 
 ```json
 {
@@ -110,8 +114,7 @@ Every response carries an `x_hlr` block. *(Illustrative — invented values show
 and inventing a number would make the figure look more rigorous while being less honest. And the
 baseline charges frontier prices for *every* request, including ones a cache served — it answers
 "what would this traffic have cost with no gateway at all", which is the comparison that matters, but
-it does flatter the cache tiers. Both choices are stated here rather than buried
-([D13](docs/DECISIONS.md)).
+it does flatter the cache tiers. Rationale for both choices: [D13](docs/DECISIONS.md).
 
 `GET /metrics` gives aggregates; `GET /dashboard` will render them live — tier breakdown, cache hit
 rate, per-gate escalation rates, latency percentiles, and cumulative spend against the baseline.
@@ -128,8 +131,9 @@ length, not certainty.
 
 The fix is the **geometric mean** of token probabilities (equivalently, inverse perplexity), which is
 length-invariant. But even that isn't a probability of being *right* — a small model producing a
-perfectly correct answer typically scores 0.5–0.75, simply because language offers many valid ways to
-phrase the same thing.
+perfectly correct answer is expected to score somewhere around 0.5–0.75 (a prior the build measures
+in M0, not yet a recorded figure), simply because language offers many valid ways to phrase the same
+thing.
 
 So the gateway ships in two modes:
 
@@ -176,7 +180,9 @@ Total footprint: ~2.6 GB of models plus ~300 MB of Python dependencies.
 ollama serve &
 brew services start redis
 
-# 2. Models (~2.6 GB on disk, ~2.7 GB resident)
+# 2. Models (~2.6 GB on disk; the two chat models are ~2.7 GB resident when
+#    loaded, the embedder ~0.3 GB more — OLLAMA_MAX_LOADED_MODELS=2 keeps at
+#    most two in RAM)
 ollama pull qwen2.5:0.5b
 ollama pull qwen2.5:3b
 ollama pull nomic-embed-text
@@ -260,3 +266,7 @@ under `eval/runs/` so re-fitting calibrators never re-spends.
 | **[docs/DECISIONS.md](docs/DECISIONS.md)** | Why it's built this way, what was rejected, what would change each call |
 | **[docs/RESEARCH.md](docs/RESEARCH.md)** | Verified API shapes, confidence math, measured constraints, sources |
 | **[CLAUDE.md](CLAUDE.md)** | Working notes for AI agents in this repo |
+
+## License
+
+[MIT](LICENSE).

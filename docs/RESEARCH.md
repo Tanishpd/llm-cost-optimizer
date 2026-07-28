@@ -12,8 +12,8 @@ contradict something here, re-verify first and update this file with new evidenc
 |---|---|---|
 | Platform | macOS Darwin 25.5.0, Apple Silicon `arm64` | `uname -m` |
 | **RAM** | **8 GB unified**, 37% free | `sysctl hw.memsize`, `memory_pressure` |
-| **Swap** | **5,532 MB used of 6,144 MB (90%)** | `sysctl vm.swapusage` |
-| Free disk (initial) | 3.2 GB (99% full) — being expanded to ~20 GB | `df -h /System/Volumes/Data` |
+| **Swap** | 90% at initial measurement; **~71% after disk freed to 7.9 GB** (2026-07-27) | `sysctl vm.swapusage` |
+| Free disk | 3.2 GB initial (99% full) → **7.9 GB (97% full) as of 2026-07-27**; target ~20 GB | `df -h /System/Volumes/Data` |
 | Ollama | v0.30.10 installed, **server not running**, **zero models pulled** | `ollama --version`, empty manifests dir |
 | Redis | **7.2.7** running, `MODULE LIST` **empty**, `FT._LIST` unknown command | `redis-cli` |
 | Redis atomics | `atomicvar_api:c11-builtin` | `redis-cli INFO server` |
@@ -28,7 +28,8 @@ what actually caps model size. Two compounding facts:
 
 1. **8 GB unified memory**, shared with the GPU. macOS idle takes ~3 GB; a browser takes 1–2 GB.
    Realistically **~3.5–4.5 GB is available for models.**
-2. **Swap is 90% full** (5.5 GB of 6.1 GB) *before* any model loads. macOS grows swap on disk, so
+2. **Swap was 90% full** (5.5 GB of 6.1 GB) before any model loaded — ~71% after disk was freed to
+   7.9 GB. macOS grows swap on disk, so
    the near-full disk was preventing that growth — which is the other reason freeing disk matters.
 
 Practical ceiling: **a 3B–4B Q4 model**. A 7B needs ~4.8 GB resident and will thrash against an
@@ -159,7 +160,10 @@ per-token `p = 0.9`, a 100-token answer scores `0.9^100 ≈ 2.7e-5`. Any fixed t
 ### The calibration problem (important)
 
 Even `geo_mean` is **not** a probability of correctness. A small model producing a *correct* answer
-typically lands around **0.5–0.75**, because natural language has legitimate lexical freedom
+is **expected to land around 0.5–0.75** — a prior from published perplexity behaviour, *not yet
+measured here*; M0's probe recording and M4's per-tier distribution logging replace this expectation
+with data. The reason it sits well below 1.0 even when right: natural language has legitimate
+lexical freedom
 ("Paris is the capital" vs "The capital is Paris" — both fine, both lower the geometric mean).
 
 So a raw `geo_mean >= 0.85` threshold would escalate almost everything, and the gateway would look
@@ -169,10 +173,11 @@ broken while being arithmetically correct.
 
 - `raw` (default before calibration): `confidence = geo_mean`, thresholds **0.55** (gate 1) and
   **0.62** (gate 2), clearly documented as *not* the same number as the spec's 85%.
-- `calibrated` (after `eval/run_eval.py` runs): fit a logistic/isotonic map from the feature vector
+- `calibrated` (after `eval/run_eval.py` runs): fit a logistic map from the feature vector
   `[geo_mean, min_prob, p10_prob, mean_margin, mean_norm_entropy, frac_low, n_tokens]` to
-  `P(this tier's answer is as good as the frontier answer)`. Then **0.85 means what the spec
-  intended**: an 85% chance the cheap answer is good enough.
+  `P(this tier's answer is as good as the frontier answer)`. (Isotonic regression is the usual
+  alternative but overfits badly at N≈120; revisit only with ~1k+ labels.) Then **0.85 means what
+  the spec intended**: an 85% chance the cheap answer is good enough.
 
 **Fit one calibrator per gate**, and do not let the two thresholds be compared naively.
 
@@ -195,10 +200,16 @@ it costs money, be slow. 0.85 sits on gate 2 — the gate that actually spends �
 spec's number belongs.
 
 **Calibration is a claim that needs its own evidence.** Fitting a model does not make it calibrated.
-M6 must report held-out reliability (curve, Brier score, ECE per gate under k-fold CV), because ~120
-prompts is a small sample for a 7-feature fit. Flip to `calibrated` **only if** the held-out
-reliability curve tracks the diagonal in the 0.7–0.95 region; otherwise stay in `raw` and say so.
-Claiming "measured, not asserted" without that check would be asserting a different thing.
+M6 must report held-out reliability per gate — reliability curve (equal-count bins), Brier score,
+ECE — computed on **pooled out-of-fold predictions** under k-fold CV, because ~120 prompts is a
+small sample for a 7-feature fit (~12 points per reliability bin ⇒ ±0.28 binomial noise per bin).
+The flip rule is quantitative: `calibrated` mode only if per-gate **ECE ≤ 0.10 with a bootstrap 95%
+CI upper bound < 0.20**; otherwise stay in `raw` and say so. Claiming "measured, not asserted"
+without that check would be asserting a different thing.
+
+One scoping note: logprob distributions shift with sampling temperature, so a calibrator is valid at
+the temperature it was fitted at (eval runs at `temperature=0`). Requests at other temperatures
+should be treated as out-of-calibration — served, but flagged in `reason`.
 
 ### Hard veto (independent of score)
 
@@ -337,27 +348,19 @@ runtime requirements. The gateway runs on numpy alone.
 | Eval artifacts, logprob traces, logs | ~100 MB |
 | **Project total** | **~3.0 GB** |
 
-**Target ~20 GB free**, of which the project is only ~3 GB. The rest is machine health: with swap at
-90% and models about to claim 3 GB of RAM, macOS needs room to grow its swap file or it starts
+**Target ~20 GB free**, of which the project is only ~3 GB. The rest is machine health: with swap
+recently at 90% (~71% at last measurement) and models about to claim 3 GB of RAM, macOS needs room
+to grow its swap file or it starts
 killing processes. Below ~10 GB free this machine will be unpleasant to work on regardless of what
 this project does.
 
-### Reclaimable space found (measured, nothing deleted)
+### Reclaimable space (surveyed 2026-07-27; sizes are as-of that scan)
 
-| Location | Size | Notes |
-|---|---|---|
-| `~/Library/Containers/com.utmapp.UTM` | **24 GB** | UTM virtual-machine disk images |
-| `~/Library/Containers/com.docker.docker` | **9.2 GB** | Docker VM disk — **daemon isn't even running** |
-| `~/Library/Application Support/Code` | 7.0 GB | VS Code workspace storage + extensions |
-| `~/Library/Android` | 4.1 GB | Android SDK/emulator images |
-| `~/.cache` | 2.5 GB | `uv` 788M, `codex-runtimes` 740M, `puppeteer` 496M, `torch` 248M, `whisper` 211M |
-| `~/.npm` | 1.7 GB | npm cache — `npm cache clean --force` |
-| `~/Library/Caches/pip` | 627 MB | `pip cache purge` |
-| `~/Library/Caches/Google` | 337 MB | |
-| `~/Library/Developer/CoreSimulator` | 264 MB | iOS simulator runtimes |
-
-Docker (9.2 GB, unused) plus the caches (~5.5 GB) clears ~15 GB without touching anything you'd
-miss. UTM's 24 GB is the single biggest win if those VMs are stale.
+The largest reclaimable items on this machine were, in order: UTM VM images (~24 GB), the Docker VM
+disk (~9.2 GB, daemon not running), VS Code workspace storage (~7 GB), the Android SDK (~4.1 GB),
+and ~5 GB of assorted package-manager caches (`~/.cache`, `~/.npm`, pip — the caches alone are safe
+to clear blind: `pip cache purge`, `npm cache clean --force`). Disk went 3.2 → 7.9 GB free after a
+first pass; re-run the survey rather than trusting these numbers if more is needed.
 
 ---
 

@@ -47,9 +47,12 @@ estimated ~3.0 GB) on an 8 GB machine with a browser open invites swap thrash. T
 `keep_alive=10m` means an occasional ~1–2 s cold load — telemetry must record those separately
 (`model_loads` in `/metrics`) so they don't pollute the latency percentiles.
 
-**Router errors are cheap; gate errors are not.** The pre-router is allowed to guess wrong — a bad
-entry costs latency, because the gates still catch a weak answer. That asymmetry is why M3 ships a
-heuristic and M6 invests in calibrating the gates.
+**Router errors are cheap in one direction only.** A too-low entry costs latency — the gates still
+catch a weak answer. A too-high entry (straight to `frontier`) is ungated spend: nothing checks it.
+So the heuristic router is fine for choosing *between the local tiers*, frontier entry must require
+multiple hardness signals rather than any single feature, and M6 measures the **false-expensive
+rate** to keep that path honest. That asymmetry is why M3 ships a heuristic and M6 invests in
+calibrating the gates.
 
 ---
 
@@ -168,12 +171,25 @@ reaching the frontier — each with its confidence score and reason.
 ### M5 — Semantic cache
 
 - `app/cache/semantic.py`:
-  - embed via `nomic-embed-text` (768-dim), store `float32` bytes in a Redis hash;
+  - embed via `nomic-embed-text` (768-dim), store `float32` bytes in a Redis hash. **Use nomic's
+    task-prefix convention consistently — the same `search_query:`-style prefix on both the stored
+    and the incoming side.** Mismatched prefixes shift the whole similarity distribution and silently
+    invalidate the threshold;
   - warm numpy matrix in-process, Redis as source of truth, re-sync on a version counter;
-  - cosine over the matrix; `SEMANTIC_THRESHOLD=0.95`, deliberately conservative;
+  - cosine over the matrix; `SEMANTIC_THRESHOLD=0.95`, deliberately conservative. The threshold is
+    an assertion about this embedder — so preflight gains a **20-pair probe** (10 paraphrase pairs,
+    10 near-miss pairs like Australia/Austria) that prints both similarity distributions, replacing
+    "0.95 seems safe" with a measured margin;
+  - a semantic hit must also **match the stored entry's sampling params** (`exact_key` check —
+    same temperature/top_p/max_tokens/system prompt), or it's a miss. Cosine similarity says the
+    *questions* match; the params say the *answers* are interchangeable;
+  - a vector whose exact-cache entry has TTL-expired is a **dangling vector**: treat as a miss and
+    lazily delete it;
   - **false-hit guards, all must pass:** number sets equal, capitalized-entity sets equal, negation
-    markers match. These catch the classic failures — *capital of Australia* vs *capital of Austria*,
-    *convert 50 USD* vs *convert 70 USD*;
+    markers match — including contractions (*isn't*, *won't*, *can't*) and bare *no*. These catch
+    the classic failures — *capital of Australia* vs *capital of Austria*, *convert 50 USD* vs
+    *convert 70 USD*. Argument-order swaps (*USD to EUR* vs *EUR to USD*) are an accepted residual
+    risk, documented rather than guarded;
   - **never** semantic-cache multi-turn conversations, differing system prompts, or prompts over
     `SEMANTIC_MAX_CHARS` — long prompts carry attached context the embedding flattens away;
   - LRU eviction over `hlr:lru` (zset of id → last-access ts), capped at `SEMANTIC_MAX_ENTRIES`.
@@ -187,8 +203,6 @@ This is what elevates the project from "works" to "measured".
 
 - `eval/dataset.py` — ~120 labeled prompts across easy-factual / summarization / reasoning / code /
   obscure-factual.
-- `eval/dataset.py` — ~120 labeled prompts across easy-factual / summarization / reasoning / code /
-  obscure-factual.
 - `eval/run_eval.py` — for each prompt, run **all three** model tiers, capturing confidence features
   at each. Then call a **real frontier API** (`FRONTIER_BASE_URL`/`FRONTIER_API_KEY`) for the
   reference answer, and a **separate judge model** (`EVAL_JUDGE_BASE_URL`/`EVAL_JUDGE_MODEL`/
@@ -198,15 +212,23 @@ This is what elevates the project from "works" to "measured".
 - Fit **two** calibrators (logistic regression, `requirements-eval.txt`), one per gate, mapping the
   feature vector to `P(this tier's answer is as good as the frontier's)`. Persist to
   `eval/calibrator.json`.
-- **Validate the calibration, don't assume it.** Fit under k-fold cross-validation and report
-  held-out reliability per gate: reliability curve, Brier score, ECE. ~120 prompts is a small sample
-  for a 7-feature fit, and a fitted model is not a calibrated one.
+- **Validate the calibration, don't assume it.** Fit under k-fold cross-validation and compute all
+  reliability metrics on the **pooled out-of-fold predictions** (per-fold bins at N≈120 are noise):
+  reliability curve with equal-count bins, Brier score, and ECE, per gate. Judge quality is part of
+  the measurement: give the judge a minimal rubric (acceptable = factually equivalent and complete
+  vs the reference), re-judge a ~30-prompt subsample 2–3× and report judge self-agreement. If power
+  is short, growing the set to ~500 prompts (~1,500 calls, ~4.2× the spend) is the cheapest fix.
 - Sweep both thresholds jointly; emit a cost-vs-quality frontier: escalation rate per gate, cost
   saved, quality preserved, and **false-cheap rate** (bad answers wrongly kept — the metric that
   actually matters).
-- Flip to `CONFIDENCE_MODE=calibrated` (`TARGET_SMALL=0.92`, `TARGET_LARGE=0.85`) **only if the
-  held-out reliability curve tracks the diagonal in the 0.7–0.95 region.** Otherwise stay in `raw`
-  and report that honestly — a negative result here is a real finding, not a failure.
+- Report the **false-expensive rate** too — of the prompts the pre-router would enter at `frontier`,
+  how many would a local gate have accepted? Free to compute: eval already runs all three tiers per
+  prompt. This is the only check on the one path with no gate (see the entry-asymmetry note above).
+- Flip to `CONFIDENCE_MODE=calibrated` (`TARGET_SMALL=0.92`, `TARGET_LARGE=0.85`) **only on a
+  quantitative pass, per gate: ECE ≤ 0.10 on pooled out-of-fold predictions, with a bootstrap 95%
+  CI upper bound < 0.20.** "Looks close to the diagonal" is not a criterion at this sample size —
+  ~12 points per bin puts ±0.28 of noise on each bin. Fail → stay in `raw` and report that honestly;
+  a negative result here is a real finding, not a failure.
 
 **Cost.** Per prompt: 1 reference completion + 1 judge call per local tier = 3 frontier-class calls;
 ~120 prompts ≈ 360 calls. Compute the actual figure from your configured rates before running — the
@@ -261,7 +283,7 @@ degraded gateway must still answer. Add trace IDs, timeouts, single-flight stamp
 | `CONFIDENCE_STRATEGY` | `logprobs` | `logprobs` \| `self_consistency` |
 | `TOP_LOGPROBS` | `5` | 0–20, server-validated |
 | `ROUTER_SMALL_MAX_TOKENS` | `60` | Enter at 2a below this |
-| `ROUTER_ESCALATE_MIN_TOKENS` | `600` | Skip both local tiers above this |
+| `ROUTER_ESCALATE_MIN_TOKENS` | `600` | Above this, enter at `local_large` — **never frontier on length alone** (long ≠ hard: summarization is long and cheap). Frontier entry needs length *plus* other hardness features |
 | `SEMANTIC_MAX_ENTRIES` | `10000` | LRU cap on the semantic index |
 | `MOCK_LATENCY_MS` | `1800` | Mock frontier simulated latency (`mock_frontier` only) |
 | `MOCK_JITTER_MS` | `400` | Mock frontier latency jitter |
@@ -318,6 +340,11 @@ eval/
 scripts/
   preflight.py         environment checks
   demo.py              five-tier walkthrough
+tests/
+  test_confidence.py   pure-function metrics — first tests written (M4)
+  test_keys.py         normalization + hashing (M2)
+  test_guards.py       semantic-cache guard cases incl. Australia/Austria (M5)
+  test_metrics_reconciliation.py   the /metrics identities from API.md (M2+)
 static/dashboard.html
 docs/{ARCHITECTURE,PLAN,API,DECISIONS,RESEARCH}.md
 CLAUDE.md  README.md  requirements.txt  requirements-eval.txt  .env.example  .gitignore
