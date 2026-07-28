@@ -31,14 +31,38 @@ _ENTITY_RE = re.compile(r"\b[A-Z][a-zA-Z]{2,}\b")
 
 # Words that are capitalized only because they start a sentence, so they carry
 # no entity signal and would otherwise cause spurious mismatches.
+#
+# This list is a heuristic and will always be incomplete — which is why
+# `check_pair` also applies the general rule below (a word seen lowercase in
+# either prompt is not a proper noun). The demo caught "Answer" and "One"
+# being read as entities in "Answer in one word." / "One word.", rejecting a
+# genuine paraphrase.
 _SENTENCE_STARTERS = frozenset({
-    "The", "What", "Who", "Where", "When", "Why", "How", "Which", "Can", "Could",
-    "Would", "Should", "Is", "Are", "Was", "Were", "Do", "Does", "Did", "Please",
-    "Give", "Tell", "List", "Explain", "Describe", "Write", "Show", "Find",
-    "Summarize", "Summarise", "Translate", "Convert", "Compare", "Name", "If",
-    "In", "On", "At", "For", "And", "But", "Or", "It", "This", "That", "There",
-    "A", "An", "As", "So", "To", "Of",
+    # interrogatives and auxiliaries
+    "The", "What", "Who", "Where", "When", "Why", "How", "Which", "Whose",
+    "Can", "Could", "Would", "Should", "Shall", "Will", "May", "Might", "Must",
+    "Is", "Are", "Was", "Were", "Am", "Be", "Been", "Has", "Have", "Had",
+    "Do", "Does", "Did", "Don", "Doesn", "Isn", "Aren",
+    # instruction verbs
+    "Please", "Give", "Tell", "List", "Explain", "Describe", "Write", "Show",
+    "Find", "Summarize", "Summarise", "Translate", "Convert", "Compare", "Name",
+    "Answer", "Reply", "Respond", "Return", "Output", "Provide", "State", "Say",
+    "Use", "Make", "Create", "Add", "Remove", "Include", "Keep", "Consider",
+    "Suppose", "Assume", "Prove", "Derive", "Design", "Implement", "Rewrite",
+    "Extract", "Identify", "Calculate", "Compute", "Define", "Discuss",
+    # quantifiers, numbers, determiners, connectives
+    "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
+    "First", "Second", "Third", "Just", "Only", "Both", "Each", "Every", "Some",
+    "Any", "All", "None", "Many", "Much", "More", "Most", "Few", "Several",
+    "If", "In", "On", "At", "For", "And", "But", "Or", "Nor", "So", "To", "Of",
+    "It", "This", "That", "These", "Those", "There", "Here", "Now", "Then",
+    "Also", "However", "Because", "Since", "While", "With", "Without",
+    "A", "An", "As", "Your", "My", "Our", "Their", "Its", "His", "Her",
+    "Not", "No", "Yes", "Never", "Always",
 })
+
+# Any word appearing in lowercase form is not a proper noun.
+_LOWER_WORD_RE = re.compile(r"(?<![\w'])[a-z][a-z]{2,}(?![\w'])")
 
 # Negation. "is safe" vs "is not safe" are opposite questions with near-identical
 # embeddings. Contractions matter: "isn't" must count as negation.
@@ -119,6 +143,18 @@ def check_pair(candidate: str, stored: str) -> GuardResult:
         )
 
     cand_entities, stored_entities = extract_entities(candidate), extract_entities(stored)
+
+    # A word appearing lowercase in *either* prompt is not a proper noun — it
+    # was only capitalized by sentence position. This is the general form of
+    # the stopword list above, and catches what that list misses: "One word."
+    # vs "in one word" resolves because "one" is seen lowercase. "Paris" and
+    # "London" survive, because neither is ever written lowercase.
+    seen_lowercase = set(_LOWER_WORD_RE.findall(candidate)) | set(
+        _LOWER_WORD_RE.findall(stored)
+    )
+    cand_entities -= seen_lowercase
+    stored_entities -= seen_lowercase
+
     if cand_entities != stored_entities:
         only_cand = sorted(cand_entities - stored_entities)
         only_stored = sorted(stored_entities - cand_entities)

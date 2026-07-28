@@ -257,14 +257,14 @@ This is what elevates the project from "works" to "measured".
 price constants in `.env.example` are placeholders, not quotes. Serving continues to use the mock by
 default; only eval spends real money.
 
-### M7 — Dashboard
+### M7 — Dashboard ✅ DONE (2026-07-28)
 
 `GET /dashboard` — self-contained HTML (no CDN), auto-refreshing: per-tier breakdown, cache hit rate,
 cumulative spend vs the all-frontier baseline, per-gate (`small`, `large`) escalation rates, latency
 percentiles per tier, and a live request log showing each routing reason and the full tier path taken.
 This is also where the estimated latency figures quoted in README.md get replaced by real percentiles.
 
-### M8 — Hardening and the demo
+### M8 — Hardening and the demo ✅ DONE (2026-07-28)
 
 Graceful degradation at every dependency — **Redis down → cache off, still serve; Ollama down →
 escalate everything and say so; a model not pulled → skip that tier with a reason, don't 500.** A

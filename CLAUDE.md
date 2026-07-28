@@ -190,8 +190,13 @@ multi-worker correct in principle but it's untested.
 
 ## Current state
 
-**M0 complete (2026-07-28).** Logprobs verified on this machine, `app/confidence.py` shipped with 37
-passing unit tests, `scripts/preflight.py` green. All three models pulled; disk ~34 GB free.
+**M0–M8 complete (2026-07-28).** The gateway runs: all five tiers, both gates, eval harness,
+dashboard. 456 unit + 6 integration tests. `python3 scripts/demo.py` walks every tier.
+
+**Shipping in `raw` confidence mode, not `calibrated`** — M6 fitted both calibrators and gate
+`large` failed its validation (good ECE, but no better than the base rate on Brier, i.e. calibrated
+without being useful). `should_flip()` requires both gates, so 0.85 has not been earned. RESEARCH.md
+§3.4.
 
 Measured, and now recorded in RESEARCH.md §3.1–3.2:
 

@@ -27,6 +27,7 @@ from app.cache import guards
 from app.cache.exact import CachedAnswer, ExactCache
 from app.cache.keys import build_key
 from app.cache.semantic import SemanticCache, SemanticHit
+from app.cache.singleflight import SingleFlight
 from app.config import Settings, get_settings
 from app.dashboard import render as render_dashboard
 from app.costs import TokenUsage, compute_cost, micro_to_usd, price_micro_usd
@@ -93,6 +94,7 @@ async def lifespan(app: FastAPI):
         redis, ttl_local=settings.cache_ttl_local, ttl_frontier=settings.cache_ttl_frontier
     )
     app.state.telemetry = Telemetry(redis)
+    app.state.singleflight = SingleFlight(redis)
     app.state.semantic_cache = SemanticCache(
         redis,
         threshold=settings.semantic_threshold,
@@ -159,6 +161,10 @@ def _frontier(request: Request) -> FrontierProvider:
 
 def _semantic_cache(request: Request) -> SemanticCache:
     return request.app.state.semantic_cache
+
+
+def _singleflight(request: Request) -> SingleFlight:
+    return request.app.state.singleflight
 
 
 @app.middleware("http")
@@ -350,6 +356,39 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
                         )
                         cache_record.guard_rejected = outcome.guard_rejected
 
+    # ---- single flight ---------------------------------------------------
+    # Both caches missed. If an identical request is already in flight, wait
+    # briefly for its answer rather than paying for the same cascade twice.
+    # Purely an efficiency measure: a waiter that times out proceeds anyway,
+    # because a duplicate call costs milliseconds and a wedged request costs
+    # the gateway.
+    lease = None
+    if not body.bypass_cache:
+        lease = await _singleflight(request).acquire(key.digest)
+        if not lease.acquired:
+            latency["singleflight_wait"] = lease.waited_ms
+            if lease.should_recheck:
+                shared = await cache.get(key)
+                if shared is not None:
+                    cache_record.exact_hit = True
+                    return await _serve_cached(
+                        request,
+                        hit=shared,
+                        tier="cache_exact",
+                        reason=(
+                            f"served from an identical in-flight request that completed "
+                            f"{lease.waited_ms:.0f} ms earlier (single-flight); answer "
+                            f"originally from {shared.tier}"
+                        ),
+                        trace_id=trace_id,
+                        started=started,
+                        latency=latency,
+                        degraded=degraded,
+                        router_record=router_record,
+                        cache_record=cache_record,
+                        confidence_mode=settings.confidence_mode,
+                    )
+
     # ---- the cascade -----------------------------------------------------
     # Walk the tier chain from the router's entry point. Each tier's gate
     # decides whether its answer stands or the walk continues.
@@ -401,6 +440,9 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
 
     latency.update(outcome.latency_ms)
     degraded.extend(outcome.degraded)
+
+    if lease is not None and lease.acquired:
+        await _singleflight(request).release(key.digest, lease.token)
 
     # Checked directly rather than via `outcome.served` so the type narrows.
     if outcome.completion is None or outcome.tier is None:

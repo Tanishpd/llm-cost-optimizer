@@ -3,12 +3,14 @@
 An API gateway that sits in front of several models of escalating cost and decides — per request —
 the cheapest one that will actually do the job.
 
-> **Status: M0 complete — the core assumption is verified. M1–M8 not built.**
-> Ollama logprobs confirmed on real hardware, the confidence-scoring module ships with 37 passing
-> unit tests, and `scripts/preflight.py` is green. What does *not* exist yet: the gateway itself, the
-> caches, the router, the dashboard. Example payloads below still use invented values to show field
-> layout; the only measured numbers in these docs are in
-> [RESEARCH.md](docs/RESEARCH.md) §2, §3.1–3.2 and §5, and they are labelled as such.
+> **Status: M0–M8 complete. The gateway runs.**
+> All five tiers, both confidence gates, the eval harness and the dashboard are built and working —
+> 456 unit tests plus 6 integration tests against live models. Run `python3 scripts/demo.py` to walk
+> every tier in one go.
+>
+> The one honest caveat: **the gateway ships in `raw` confidence mode, not `calibrated`.** M6 fitted
+> the calibrators and one of the two gates failed its validation, so 0.85 has not been earned yet.
+> That result is in [RESEARCH.md §3.4](docs/RESEARCH.md), not hidden.
 
 Point any OpenAI-compatible client at it. It answers from cache when it can, tries a 0.5B model
 first, steps up to a 3B when that isn't confident enough, and reaches for the expensive API only
@@ -46,17 +48,17 @@ across a labeled prompt set and calibrates the thresholds, rather than asserting
 
 A request descends five tiers and stops at the first one that can serve it.
 
-| Tier | What it does | Cost | Expected latency (est.) |
-|---|---|---|---|
-| **Exact cache** | Hash of the normalized prompt + model + sampling params | $0 | ~1 ms |
-| **Semantic cache** | Embedding similarity — catches rewordings of a question you've already asked | ~$0 | ~20 ms |
-| **Small SLM** | `qwen2.5:0.5b`, with a confidence score from its logprobs | $0 | ~120 ms |
-| **Large SLM** | `qwen2.5:3b`, same treatment — reached only when the 0.5B wasn't sure | $0 | ~450 ms |
-| **Frontier** | Escalation over real HTTP to an OpenAI-shaped endpoint | metered | ~2 s |
+| Tier | What it does | Cost | p50 | p95 |
+|---|---|---|---|---|
+| **Exact cache** | Hash of the normalized prompt + model + sampling params | $0 | **0.2 ms** | 0.2 ms |
+| **Semantic cache** | Embedding similarity — catches rewordings of a question you've already asked | ~$0 | **40 ms** | 60 ms |
+| **Small SLM** | `qwen2.5:0.5b`, with a confidence score from its logprobs | $0 | **506 ms** | 1.2 s |
+| **Large SLM** | `qwen2.5:3b`, same treatment — reached only when the 0.5B wasn't sure | $0 | **862 ms** | 2.2 s |
+| **Frontier** | Escalation over real HTTP to an OpenAI-shaped endpoint | metered | **1.9 s** | 1.9 s |
 
-Latency figures are order-of-magnitude estimates for this hardware, **not measurements** — nothing has
-been benchmarked. The frontier figure is the mock's configured `MOCK_LATENCY_MS`, not a real
-provider's. M7 replaces all of these with recorded percentiles.
+**Measured** on this machine via `/metrics`, not estimated — small sample (n = 1–7 per tier), so read
+them as orders of magnitude rather than benchmarks. The frontier figure is the mock's configured
+`MOCK_LATENCY_MS`; a real provider will differ.
 
 Between the caches and the models, a **pre-router** looks at the prompt — length, code fences,
 reasoning markers, arithmetic, attached context — and picks where to *enter* the cascade:
