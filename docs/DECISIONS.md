@@ -135,19 +135,43 @@ BLAS. An index starts paying somewhere past 100k entries, which a demo cache wil
 **Revisit if.** Cache exceeds ~100k entries, or the process needs to run multi-worker. `semantic.py`
 is written behind an interface so it's a drop-in.
 
-## D8 — Non-streaming first
+## D8 — Buffer, then stream
 
-**Decision.** `stream: true` returns 400.
+**Decision.** `stream: true` is supported. The cascade runs to completion exactly as it does for a
+non-streaming request, and only then is the finished answer re-emitted as SSE. **Superseded the
+original D8**, which returned 400; the reversal condition that decision named ("buffer the local
+answer, stream only after the decision") is what shipped.
 
-**Why.** The gate cannot decide whether to escalate until the complete response and its logprobs
-exist. Streaming a local answer means streaming tokens that may then be discarded and replaced by the
-frontier's — worse than not streaming. Ollama's non-streaming path accumulates all chunks' logprobs
-into the final response, which is exactly what the gate needs.
+**Why not stream as tokens arrive.** The gate cannot decide whether to escalate until the complete
+answer and its logprobs exist. Streaming the 0.5B's tokens live means streaming text that may then be
+discarded and replaced by the frontier's — the user watches a wrong answer appear and get overwritten,
+which is worse than a pause. Ollama's non-streaming path accumulates all chunks' logprobs into the
+final response, which is exactly what the gate needs, so buffering costs nothing there either.
+
+**What it is honestly for.** Client compatibility, not latency. **Time-to-first-token does not
+improve** — the whole answer is in memory before the first byte goes out. What changes is that
+`stream=True` in the OpenAI SDK, LangChain, and everything else that assumes SSE now works instead of
+erroring. Saying otherwise would be the easy overclaim here.
+
+Two properties fall out of buffering that a true streaming proxy cannot offer, and they are worth
+more than the TTFB it doesn't win:
+
+- **No token is ever retracted.** Rejected tiers are discarded before anything is sent.
+- **Errors stay HTTP errors.** Everything that can fail has already failed by the time the response
+  starts, so a failure is a 4xx/5xx with a JSON body — never a half-written stream a client has to
+  detect and unwind. The `X-HLR-*` headers survive for the same reason: the routing decision is final
+  before the first byte.
 
 **Rejected.** Streaming with post-hoc correction (visibly rewrites text the user already read).
+Streaming only when the router enters at `frontier`, where no gate follows — real TTFB, but it makes
+the streaming contract depend on a routing guess, so the same request could stream or not on
+different days.
 
-**Revisit.** Buffer the local answer, stream only after the decision. Real work, no demo value,
-deferred rather than dismissed.
+**Revisit if.** True token-level streaming becomes possible without giving up the gate — which needs
+a confidence signal available *during* generation, not after. A running geometric mean over the
+tokens so far is the obvious candidate, and `confidence.py` computes exactly that from a prefix. It
+would mean deciding to escalate mid-answer and having already shown some of it, so the retraction
+problem returns in a smaller form.
 
 ## D9 — The frontier tier speaks real HTTP, even when mocked
 

@@ -93,7 +93,8 @@ Drop-in OpenAI-compatible. An existing client works unchanged by pointing `base_
 | `temperature` | float | `0.0` | Forwarded to whichever tier runs. **Part of the cache key.** |
 | `top_p` | float | `1.0` | Forwarded. **Part of the cache key.** |
 | `max_tokens` | int | `512` | Forwarded. **Part of the cache key.** |
-| `stream` | bool | `false` | `true` returns 400 — see [Streaming](#streaming). |
+| `stream` | bool | `false` | `true` returns SSE — see [Streaming](#streaming). Does **not** lower time-to-first-token. |
+| `stream_options` | object | `null` | `{"include_usage": true}` appends a final usage frame. Only meaningful with `stream: true`. |
 
 **Reserved `model` values** — escape hatches that bypass routing, for benchmarking and debugging:
 
@@ -213,10 +214,50 @@ X-HLR-Saved-Usd: 0.001660
 
 ### Streaming
 
-`"stream": true` returns **400** with `unsupported_streaming`. This is a deliberate limitation, not an
-oversight: the confidence gate cannot decide whether to escalate until the full response and its
-logprobs exist, so streaming a local answer would mean streaming tokens that may then be discarded and
-replaced. Deferred in PLAN.md with the resolution sketched (buffer locally, stream only post-decision).
+`"stream": true` returns `text/event-stream` in the OpenAI `chat.completion.chunk` format. Any
+OpenAI-compatible client works unchanged.
+
+**It does not lower time-to-first-token, and is not meant to.** The confidence gate cannot decide
+whether to escalate until the complete answer and its logprobs exist, so the cascade runs to
+completion first and the finished answer is then re-emitted as frames. This is *buffer-then-stream*
+([D8](DECISIONS.md)) — the feature is client compatibility, not latency.
+
+Frame order:
+
+| # | Frame | Carries |
+|---|---|---|
+| 1 | role | `delta: {"role": "assistant"}` |
+| 2..n | content | `delta: {"content": "..."}` — concatenate to rebuild the answer exactly |
+| n+1 | terminal | `finish_reason`, **and the full `x_hlr` block** |
+| n+2 | usage *(optional)* | `choices: []` and `usage`, only with `stream_options.include_usage` |
+| last | `data: [DONE]` | the sentinel every client watches for |
+
+`x_hlr` rides on the **terminal** frame, not the first: `path` is not final until the cascade is, and
+a request that walked 0.5B → 3B → frontier only knows its full path at the end. Invariant 1 still
+holds — every response carries the block.
+
+```
+data: {"id":"chatcmpl-271c539f071d","object":"chat.completion.chunk","created":1785257451,
+       "model":"qwen2.5:0.5b","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
+
+data: {...,"choices":[{"index":0,"delta":{"content":"The capital of France "},"finish_reason":null}]}
+
+data: {...,"choices":[{"index":0,"delta":{"content":"is Paris."},"finish_reason":null}]}
+
+data: {...,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"x_hlr":{...}}
+
+data: [DONE]
+```
+
+Two consequences of buffering, both useful:
+
+- **Errors are still ordinary HTTP errors.** Everything that can fail has already failed before the
+  first byte, so a failure is a 4xx/5xx with a JSON body — never a truncated stream.
+- **The `X-HLR-*` headers survive.** The routing decision is final when the response starts, so it
+  rides in the headers too.
+
+`STREAM_CHUNK_CHARS` (default `24`) sets how much text each content frame carries. It only trades
+frame smoothness against ~200 bytes of JSON envelope per frame; `0` sends the answer in one frame.
 
 ---
 
@@ -406,7 +447,6 @@ Invariant 1.
 | Status | `code` | When |
 |---|---|---|
 | 400 | `invalid_request` | Malformed body, empty `messages` |
-| 400 | `unsupported_streaming` | `stream: true` |
 | 401 | `unauthorized` | Missing or invalid API key. Carries `WWW-Authenticate: Bearer` |
 | 404 | `model_not_found` | Reserved `model` value naming a tier that isn't configured |
 | 413 | `request_too_large` | Body over `MAX_BODY_BYTES` |

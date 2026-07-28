@@ -41,6 +41,14 @@ class Message(BaseModel):
     content: str
 
 
+class StreamOptions(BaseModel):
+    """OpenAI's `stream_options`. Only `include_usage` is meaningful here."""
+
+    model_config = ConfigDict(extra="allow")
+
+    include_usage: bool = False
+
+
 class ChatCompletionRequest(BaseModel):
     """OpenAI-compatible. An existing client works by changing `base_url`."""
 
@@ -51,7 +59,15 @@ class ChatCompletionRequest(BaseModel):
     temperature: float = 0.0
     top_p: float = 1.0
     max_tokens: int = 512
+    # Supported via buffer-then-stream: the cascade runs to completion, then
+    # the finished answer is re-emitted as SSE. It does NOT lower
+    # time-to-first-token — see app/streaming.py and D8.
     stream: bool = False
+    stream_options: StreamOptions | None = None
+
+    @property
+    def wants_usage_chunk(self) -> bool:
+        return bool(self.stream_options and self.stream_options.include_usage)
 
     @property
     def user_prompt(self) -> str:

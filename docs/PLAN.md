@@ -374,6 +374,52 @@ This does **not** change the shipped default. Gate `large` still failed M6, so
 `raw` remains correct; what changed is that flipping the switch now does what
 the switch says.
 
+### M11 — Streaming, by buffering first ✅ DONE (2026-07-28)
+
+D8 said `stream: true` returns 400, and named its own reversal condition:
+"buffer the local answer, stream only after the decision." That is what
+shipped. The decision was reversed, not softened.
+
+`app/streaming.py` takes a *finished* `ChatCompletionResponse` and yields
+OpenAI `chat.completion.chunk` frames. Nothing above it changed — the cascade,
+the gates and the caches run exactly as before, which is the point: a gate
+cannot decide without the whole answer, so the answer is complete before the
+first byte goes out.
+
+**What it does not do is lower time-to-first-token**, and the docs say so in
+those words (`check_docs.py` now enforces it). The feature is client
+compatibility. Verified against the real OpenAI Python SDK rather than against
+our own belief about the format:
+
+    openai 2.49.0, stream=True, stream_options={"include_usage": True}
+      -> reassembled text, exactly one role frame, usage frame present
+
+Three properties fall out of buffering, and they are worth more than the TTFB
+it doesn't win:
+
+    escalating request, cache bypassed
+      path        ['local_small', 'local_large', 'frontier']
+      streamed    only the frontier's text — the two rejected local answers
+                  appear nowhere in the SSE bytes
+      x_hlr       still reports all three tiers were paid for
+
+    both tiers down + stream=true
+      -> 503 with a JSON body, not a truncated stream
+
+    X-HLR-Tier / -Cost-Usd / -Saved-Usd survive streaming, because the routing
+    decision is final before the response starts
+
+The escalation case is the load-bearing test. A streaming implementation that
+got the framing right and leaked a discarded 0.5B answer would pass a naive
+format test and be wrong; `tests/test_streaming.py` asserts the rejected text
+is absent from the raw bytes.
+
+`STREAM_CHUNK_CHARS` (default 24) trades frame smoothness against ~200 bytes
+of JSON envelope per frame. The chunker is lossless — a property test asserts
+the deltas concatenate back to the source across unicode, code fences and
+mixed whitespace, because a chunker that quietly eats a newline looks fine in
+a terminal and is broken in rendered markdown.
+
 ---
 
 ## Configuration surface
@@ -412,6 +458,7 @@ the switch says.
 | `SEMANTIC_ENABLED` | `true` | Kill switch for T1 |
 | `SEMANTIC_THRESHOLD` | `0.95` | Cosine floor; conservative on purpose |
 | `SEMANTIC_MAX_CHARS` | `500` | Above this, skip semantic caching |
+| `STREAM_CHUNK_CHARS` | `24` | Characters per SSE content frame. Trades frame smoothness against ~200 bytes of envelope each; `0` sends one frame |
 | `CONFIDENCE_MODE` | `raw` | `raw` \| `calibrated` |
 | `CALIBRATOR_PATH` | `eval/calibrator.json` | Read once at startup. Absent is fine in `raw`; absent in `calibrated` refuses to start rather than silently serving raw thresholds under a calibrated label |
 | `THRESHOLD_SMALL` | `0.55` | Gate 1, `geo_mean`, raw mode. **Not comparable to `THRESHOLD_LARGE`** — different model, different distribution |

@@ -23,8 +23,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from redis.asyncio import Redis
 
 from app.cache import guards
@@ -59,6 +59,7 @@ from app.schemas import (
     RouterRecord,
 )
 from app.security import PUBLIC_PATHS, ApiKeyAuth, RateLimiter, RequestLimits
+from app.streaming import sse_stream
 from app.telemetry import RequestRecord, Telemetry
 
 logger = logging.getLogger("hlr")
@@ -328,11 +329,15 @@ async def add_trace_id(request: Request, call_next):
 async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any:
     """OpenAI-compatible entry point.
 
-    Order: streaming refusal → pre-router → exact cache → chosen tier.
+    Order: pre-router → exact cache → semantic cache → chosen tier.
 
     The cache lookup needs the tier's model in its key (an answer from the 0.5B
     must never be served for a 3B request), so routing happens first. That
     costs microseconds and calls no model.
+
+    `stream: true` changes nothing above this line. The cascade always runs to
+    completion first, because a gate cannot decide without the whole answer;
+    streaming only affects how the finished result is written back (D8).
     """
     settings = _settings(request)
     ollama = _ollama(request)
@@ -340,23 +345,6 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
     started = time.perf_counter()
     latency: dict[str, float] = {}
     degraded: list[str] = []
-
-    if body.stream:
-        # Deliberate, documented limitation: the gate cannot decide whether to
-        # escalate until the full response and its logprobs exist, so streaming
-        # would mean streaming tokens that may be discarded (D8).
-        return _error(
-            status=400,
-            code="unsupported_streaming",
-            error_type="invalid_request_error",
-            message=(
-                "stream=true is not supported: confidence gating needs the complete "
-                "response before it can decide whether to escalate. See docs/DECISIONS.md D8."
-            ),
-            trace_id=trace_id,
-            degraded=degraded,
-            started=started,
-        )
 
     limits: RequestLimits = request.app.state.limits
     total_chars = sum(len(m.content) for m in body.messages)
@@ -430,6 +418,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
             cache_record.exact_hit = True
             return await _serve_cached(
                 request,
+                body=body,
                 hit=hit,
                 tier="cache_exact",
                 reason=f"exact cache hit; answer originally from {hit.tier} ({hit.model})",
@@ -497,6 +486,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
                             await semantic.touch(outcome.entry_id)
                             return await _serve_cached(
                                 request,
+                                body=body,
                                 hit=stored,
                                 tier="cache_semantic",
                                 reason=(
@@ -535,6 +525,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
                     cache_record.exact_hit = True
                     return await _serve_cached(
                         request,
+                        body=body,
                         hit=shared,
                         tier="cache_exact",
                         reason=(
@@ -735,12 +726,44 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
         hlr=hlr,
         finish_reason=completion.finish_reason,
     )
-    return JSONResponse(
-        content=response.model_dump(),
+    return _respond(request, body, response, {
+        "X-HLR-Tier": tier,
+        "X-HLR-Cost-Usd": f"{hlr.cost_usd:.6f}",
+        "X-HLR-Saved-Usd": f"{hlr.cost_saved_usd:.6f}",
+    })
+
+
+def _respond(
+    request: Request,
+    body: ChatCompletionRequest,
+    response: ChatCompletionResponse,
+    headers: dict[str, str],
+) -> Response:
+    """The single exit for a successful answer — JSON, or SSE if asked.
+
+    Both the cascade path and the cache path funnel through here so the two
+    cannot drift on what streaming does or which headers they set.
+
+    The `X-HLR-*` headers survive streaming, which is a property of buffering:
+    the routing decision is already final when the response starts, so it can
+    ride in the headers rather than only in the body.
+    """
+    if not body.stream:
+        return JSONResponse(content=response.model_dump(), headers=headers)
+
+    return StreamingResponse(
+        sse_stream(
+            response,
+            chunk_chars=_settings(request).stream_chunk_chars,
+            include_usage=body.wants_usage_chunk,
+        ),
+        media_type="text/event-stream",
         headers={
-            "X-HLR-Tier": tier,
-            "X-HLR-Cost-Usd": f"{hlr.cost_usd:.6f}",
-            "X-HLR-Saved-Usd": f"{hlr.cost_saved_usd:.6f}",
+            **headers,
+            "Cache-Control": "no-cache",
+            # Tells nginx and friends not to buffer the response back up, which
+            # would defeat the point of sending it in frames at all.
+            "X-Accel-Buffering": "no",
         },
     )
 
@@ -748,6 +771,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
 async def _serve_cached(
     request: Request,
     *,
+    body: ChatCompletionRequest,
     hit: CachedAnswer,
     tier: str,
     reason: str,
@@ -758,7 +782,7 @@ async def _serve_cached(
     router_record: RouterRecord,
     cache_record: CacheRecord,
     confidence_mode: str,
-) -> JSONResponse:
+) -> Response:
     """Return a cached answer. Shared by T0 and T1 so the two tiers cannot
     drift apart in what they report."""
     latency["total"] = round((time.perf_counter() - started) * 1000, 1)
@@ -808,14 +832,11 @@ async def _serve_cached(
         hlr=hlr,
         finish_reason=hit.finish_reason,
     )
-    return JSONResponse(
-        content=response.model_dump(),
-        headers={
-            "X-HLR-Tier": tier,
-            "X-HLR-Cost-Usd": "0.000000",
-            "X-HLR-Saved-Usd": f"{saved:.6f}",
-        },
-    )
+    return _respond(request, body, response, {
+        "X-HLR-Tier": tier,
+        "X-HLR-Cost-Usd": "0.000000",
+        "X-HLR-Saved-Usd": f"{saved:.6f}",
+    })
 
 
 def _error(

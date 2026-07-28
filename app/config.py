@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     semantic_max_entries: int = 10_000
 
     # ---- Confidence gating -----------------------------------------------
+    # Characters per SSE chunk when `stream: true`. The answer is already
+    # complete, so this only trades event smoothness against envelope overhead
+    # (~200 bytes of JSON per event). 0 sends the whole answer as one chunk.
+    stream_chunk_chars: int = 24
+
     confidence_mode: Literal["raw", "calibrated"] = "raw"
     # Where the fitted per-gate calibrators live. Read once at startup; missing
     # is fine in raw mode, fatal in calibrated mode (app/main.py).

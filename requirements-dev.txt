@@ -1,3 +1,8 @@
 -r requirements.txt
 pytest>=8.3
 pytest-asyncio>=0.24
+# Only for tests/test_streaming.py::test_the_real_openai_sdk_can_stream_from_the
+# _gateway, which is integration-marked and deselected in CI. The gateway
+# itself never imports it — a compatibility claim is worth verifying against
+# the client that actually makes it.
+openai>=1.50

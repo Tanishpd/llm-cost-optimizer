@@ -3,9 +3,9 @@
 An API gateway that sits in front of several models of escalating cost and decides — per request —
 the cheapest one that will actually do the job.
 
-> **Status: M0–M10 complete. The gateway runs, and it's hardened.**
+> **Status: M0–M11 complete. The gateway runs, and it's hardened.**
 > All five tiers, both confidence gates, the eval harness and the dashboard are built and working —
-> **573 unit tests** (hermetic, no network) plus 8 integration tests against live models. Auth, rate
+> **635 unit tests** (hermetic, no network) plus 9 integration tests against live models. Auth, rate
 > limiting, circuit breakers, structured logging and a container image are in. Run
 > `python3 scripts/demo.py` to walk every tier in one go.
 >
@@ -74,10 +74,15 @@ escalate it. A *too-high* entry — straight to `frontier` — is ungated spend 
 which is why frontier entry is deliberately rare and why the eval measures its precision
 (the false-expensive rate).
 
-**One compatibility gap, on purpose:** `stream: true` returns 400. A gate can't decide whether to
-escalate until the full response and its logprobs exist, so streaming a local answer would mean
-streaming tokens that may then be discarded and replaced. Buffer-then-stream resolves it; it's
-deferred, not overlooked ([D8](docs/DECISIONS.md)).
+**Streaming works, and the honest version of how:** `stream: true` returns SSE that any
+OpenAI-compatible client reads, but it **does not lower time-to-first-token**. A gate can't decide
+whether to escalate until the full answer and its logprobs exist, so the cascade finishes first and
+the completed answer is then re-emitted as frames — *buffer-then-stream* ([D8](docs/DECISIONS.md)).
+The feature is client compatibility, not latency.
+
+What buffering buys instead: no token is ever retracted (you never watch the 0.5B's answer get
+overwritten by the frontier's), errors stay ordinary HTTP errors rather than truncated streams, and
+the `X-HLR-*` headers survive because the routing decision is final before the first byte.
 
 ## Reading the numbers
 
@@ -373,7 +378,7 @@ from exactly-summed integer token counters.
 
 ## Milestones
 
-Eleven milestones, each independently runnable. M0 came first deliberately: it resolves the one
+Twelve milestones, each independently runnable. M0 came first deliberately: it resolves the one
 assumption everything else rests on, before anything is built on top of it.
 
 | | Milestone | State |
@@ -389,10 +394,11 @@ assumption everything else rests on, before anything is built on top of it.
 | **M8** | Hardening, degradation, demo | **done** |
 | **M9** | Auth, request limits, CI | **done** |
 | **M10** | Multi-worker, breakers, container, load test | **done** |
+| **M11** | Streaming, by buffering first | **done** — reverses D8 |
 
 ```
 $ .venv/bin/python -m pytest -q -m "not integration"
-573 passed, 8 deselected in 1.88s
+635 passed, 9 deselected in 1.77s
 
 $ .venv/bin/python scripts/preflight.py
   ✓ python 3.14.6   ✓ venv   ✓ disk 34.1 GB free   ! swap 87%
@@ -402,11 +408,12 @@ $ .venv/bin/python scripts/preflight.py
   ✓ redis reachable, no modules (brute-force cosine, as designed)
 
 $ .venv/bin/python scripts/check_docs.py
-  all 97 checks passed
+  all 107 checks passed
 ```
 
-The 8 integration tests need a live Ollama and are deselected in CI; the unit suite is hermetic and
-is re-run behind a dead proxy to keep it that way.
+The 9 integration tests need a live Ollama — one also needs the `openai` SDK, because a
+compatibility claim is worth checking against the client that actually makes it. They are deselected
+in CI; the unit suite is hermetic and is re-run behind a dead proxy to keep it that way.
 
 ## Documentation
 

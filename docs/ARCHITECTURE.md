@@ -117,6 +117,7 @@ Two properties worth naming:
 | `cache/keys.py` | Normalization + hashing (pure) | Redis |
 | `cache/exact.py` | T0 get/set/TTL | Embeddings |
 | `cache/semantic.py` | T1 index, cosine, guards | Which model answers |
+| `streaming.py` | SSE framing of a finished response (pure) | Tiers, gates, why it was buffered |
 | `costs.py` | Token → USD (pure) | Who called it |
 | `telemetry.py` | Records and aggregates | Business logic |
 | `security.py` | Key auth, request bounds, public paths | Redis, tiers |
@@ -291,9 +292,10 @@ Each is a place the design expects to change, with the interface already drawn:
 
 ## 10. What the architecture deliberately doesn't do
 
-- **No streaming.** The gate can't decide until the whole response and its logprobs exist, so
-  streaming a local answer means streaming tokens that may be discarded. `stream: true` returns 400
-  rather than pretending ([D8](DECISIONS.md#d8--non-streaming-first)).
+- **No *incremental* streaming.** `stream: true` works, but by buffering the whole cascade and then
+  re-emitting the finished answer as SSE. Time-to-first-token is unchanged — the gate can't decide
+  until the whole answer and its logprobs exist, and streaming tokens that may be discarded is worse
+  than a pause ([D8](DECISIONS.md)).
 - **Worker count is capped by RAM, not by design.** Each worker holds its own numpy replica and
   HTTP pool; on 8 GB, 2–4 is the practical ceiling.
 - **No tenancy.** Auth and rate limiting exist and are per-*key*, but a key is a credential, not an
