@@ -17,6 +17,7 @@ from app.config import Settings
 from app.main import app
 from app.providers.base import Completion, ProviderTimeout, ProviderUnavailable
 from app.ratelimit import RedisRateLimiter
+from app.resilience import BreakerRegistry, RetryPolicy
 from app.security import ApiKeyAuth, RateLimiter, RequestLimits
 from app.telemetry import Telemetry
 
@@ -99,6 +100,7 @@ def client_factory():
         semantic: SemanticCache | None = None,
         auth: ApiKeyAuth | None = None,
         limits: RequestLimits | None = None,
+        breakers: BreakerRegistry | None = None,
     ) -> TestClient:
         c = TestClient(app)
         c.app.state.settings = settings or Settings(_env_file=None)
@@ -124,6 +126,10 @@ def client_factory():
         c.app.state.auth = auth if auth is not None else ApiKeyAuth(set())
         c.app.state.rate_limiter = RedisRateLimiter(None, limit=0)
         c.app.state.limits = limits if limits is not None else RequestLimits()
+        # Breakers off by default (a very high threshold) so a test that
+        # deliberately fails a tier repeatedly does not trip one mid-suite.
+        c.app.state.breakers = breakers or BreakerRegistry(failure_threshold=10**6)
+        c.app.state.retry_policy = RetryPolicy(attempts=1)
         return c
 
     return _make

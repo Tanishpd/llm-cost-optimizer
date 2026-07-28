@@ -289,6 +289,12 @@ degraded gateway must still answer. Add trace IDs, timeouts, single-flight stamp
 | `FRONTIER_TIMEOUT_S` | `60` | Read timeout for the frontier tier |
 | `DEFAULT_MAX_TOKENS` | `512` | When the request omits `max_tokens` |
 | `DEFAULT_TEMPERATURE` | `0.0` | When the request omits `temperature` |
+| `BREAKER_FAILURE_THRESHOLD` | `3` | Consecutive failures before a tier is skipped |
+| `BREAKER_COOLDOWN_S` | `30` | How long a tripped circuit stays open before one probe |
+| `RETRY_ATTEMPTS` | `2` | Total attempts per tier call |
+| `RETRY_BASE_DELAY_S` | `0.25` | Exponential backoff base, with full jitter |
+| `LOG_LEVEL` | `INFO` | |
+| `LOG_FORMAT` | `text` | `text` \| `json` — JSON attaches the trace id per line |
 | `WARM_MODELS_ON_STARTUP` | `true` | 1-token call per chat model in the lifespan, so the first real request skips the ~1.9 s cold load measured in M0 |
 | `FRONTIER_BASE_URL` | `http://localhost:8001/v1` | Point at a real provider to go live |
 | `FRONTIER_API_KEY` | `mock-key` | Bearer token |
