@@ -19,12 +19,13 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
-from app.costs import micro_to_usd, saved_pct
+from app.costs import TokenUsage, micro_to_usd, price_micro_usd, saved_pct
 
 logger = logging.getLogger("hlr.telemetry")
 
@@ -173,7 +174,12 @@ class Telemetry:
                 continue
         return out
 
-    async def metrics(self) -> dict[str, Any]:
+    async def metrics(
+        self,
+        *,
+        price_in: Decimal = Decimal("2.50"),
+        price_out: Decimal = Decimal("10.00"),
+    ) -> dict[str, Any]:
         """Aggregates for `/metrics` and the dashboard.
 
         Returns a zeroed but structurally complete payload when Redis is
@@ -191,8 +197,21 @@ class Telemetry:
         loads = await self._hash(K_LOADS)
 
         requests = cost.get("requests", 0)
-        actual = cost.get("actual_micro_usd", 0)
-        baseline = cost.get("baseline_micro_usd", 0)
+
+        # Derived from the token counters at read time, NOT from the summed
+        # per-request costs. Per-request amounts are rounded to whole micro-USD,
+        # so summing them drifts by up to half a micro per request — a 200-request
+        # load test surfaced a 75 micro-USD gap against the documented identity.
+        # Computing from exactly-summed integer token counts makes the identity
+        # in docs/API.md true by construction rather than approximately.
+        actual = price_micro_usd(
+            TokenUsage(cost.get("frontier_in", 0), cost.get("frontier_out", 0)),
+            price_in, price_out,
+        )
+        baseline = price_micro_usd(
+            TokenUsage(cost.get("baseline_in", 0), cost.get("baseline_out", 0)),
+            price_in, price_out,
+        )
 
         hits_exact = cache.get("hit_exact", 0)
         hits_semantic = cache.get("hit_semantic", 0)

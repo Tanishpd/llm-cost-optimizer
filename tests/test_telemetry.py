@@ -379,3 +379,37 @@ async def test_metrics_includes_latency(telemetry):
 async def test_empty_metrics_has_a_latency_section():
     """Structurally complete zeros — a dashboard reads this key unconditionally."""
     assert "latency_ms" in await Telemetry(None).metrics()
+
+
+async def test_aggregate_cost_derives_from_token_counters_not_rounded_sums(telemetry):
+    """Per-request costs are rounded to whole micro-USD, so summing them drifts
+    by up to half a micro each. A 200-request load test surfaced a 75 micro-USD
+    gap against the identity documented in API.md.
+
+    Deriving the aggregate from the exactly-summed integer token counts makes
+    that identity true by construction.
+    """
+    from decimal import Decimal
+
+    # 41/156 tokens prices to 1662.5 micro — exactly on a rounding boundary.
+    for _ in range(200):
+        await telemetry.record(record(
+            tier="local_large", tokens_in=41, tokens_out=156,
+            cost_micro_usd=0, baseline_micro_usd=1663,  # rounded up per request
+        ))
+
+    m = await telemetry.metrics(price_in=Decimal("2.50"), price_out=Decimal("10.00"))
+    tok, cost = m["tokens"], m["cost"]
+
+    exact = tok["baseline_in"] / 1e6 * 2.50 + tok["baseline_out"] / 1e6 * 10.00
+    assert cost["baseline_usd"] == pytest.approx(exact, abs=1e-6)
+    # And it is NOT the drifted sum of the rounded per-request values.
+    assert cost["baseline_usd"] != pytest.approx(200 * 1663 / 1e6, abs=1e-9)
+
+
+async def test_prices_are_configurable_in_aggregates(telemetry):
+    from decimal import Decimal
+
+    await telemetry.record(record(tier="frontier", tokens_in=1_000_000, tokens_out=0))
+    m = await telemetry.metrics(price_in=Decimal("5.00"), price_out=Decimal("10.00"))
+    assert m["cost"]["actual_usd"] == pytest.approx(5.00, abs=1e-4)
