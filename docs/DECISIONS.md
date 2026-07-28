@@ -161,6 +161,10 @@ in-process stub that can't fail realistically. `MOCK_FAILURE_RATE` exists to tes
 **Rejected.** An in-process function returning a static string (the brief's literal suggestion). It
 would make the cost numbers fake and the swap-to-real a refactor.
 
+**Revisit if.** A provider requires a non-OpenAI request shape that can't be expressed through
+`FRONTIER_BASE_URL` alone — then the seam moves down to `providers/base.Provider` and the mock
+becomes one implementation of it rather than a URL you point at.
+
 ## D10 — Heuristic router first, learned classifier later
 
 **Decision.** Ship hand-tuned features and weights. Define `classifier.py` as a Protocol from day one,
@@ -195,6 +199,15 @@ the cost from your configured rates before running — the price constants are p
 **Rejected.** Hand-labeling (slow, and calibration is only as good as the labels). Using the 3B to
 judge the 0.5B (works for gate 1, but nothing credible judges the top local tier — which is the gate
 that controls actual spend).
+
+**Revisit if.** Judge-vs-human agreement is measured and comes back poor. The whole scheme rests on
+an unverified assumption — that a frontier model's quality judgment approximates a person's — and it
+has not been checked here. If it doesn't hold, the calibrators are fitted to the judge's biases, and
+a hand-labeled subset becomes worth the time after all.
+
+Note that M6 ultimately ran **without** the real frontier: the 67 auto-gradable prompts have ground
+truth, so no judge was needed and nothing was spent. That path is the cheaper one and should be
+preferred whenever the question can be posed as an auto-gradable prompt.
 
 ## D12 — `qwen2.5` over `llama3.2`
 
@@ -261,3 +274,107 @@ usual reason to fall back to 3.12 doesn't apply, and using the default removes a
 
 **Revisit if.** A future dependency lacks 3.14 wheels — then `python3.13 -m venv .venv`, nothing else
 changes.
+
+## D17 — The gateway runs open when no keys are configured
+
+**Decision.** An empty `GATEWAY_API_KEYS` means no authentication. Startup logs
+a loud warning; `REQUIRE_AUTH=true` turns an open start into a hard failure.
+
+**Why.** Forcing a key would break the documented single-user quickstart, which
+is the primary way anyone first runs this. Defaulting to closed sounds safer and
+in practice means people paste a key into a README command without thinking
+about it, which is not security either.
+
+The mitigation is that open mode is *loud* and that demanding auth without
+supplying keys **refuses to start**. A configuration that silently disables auth
+while claiming to enforce it is worse than a crash, because nothing tells you.
+
+**Rejected.** Auth on by default (breaks the quickstart). Auth optional and
+silent (the actual dangerous option — it was the state before M9, and a probe
+showed an unauthenticated request returning 200 with full access to the frontier
+budget).
+
+**Revisit if.** The gateway ever ships as a binary or image people run without
+reading anything. Then closed-by-default with a generated key printed at startup
+is the better trade.
+
+## D18 — Rate-limit state lives in Redis, not in the process
+
+**Decision.** A sliding window in a Redis sorted set, behind one Lua script.
+
+**Why.** The in-process version was correct for one worker and **silently wrong**
+for more: with N workers each enforcing its own window, a configured 60/min
+becomes 60N and nothing reports it. On a gateway that spends money per request
+that is not a rounding error.
+
+Atomicity is the reason for the Lua script rather than a pipeline: without it, N
+workers can each read "59 used" and each admit a request — precisely the race
+the limiter exists to prevent.
+
+A *sliding* window rather than a fixed one, because a fixed window lets a client
+send 2× the limit across a boundary.
+
+**Fallback.** If Redis is unreachable it uses per-process state and logs that it
+has. A limit that multiplies by worker count is worse than a shared one and far
+better than none. `/healthz` reports which mode is live rather than leaving it
+to be guessed.
+
+**Revisit if.** Multiple gateway hosts appear — the window is per-Redis, so
+sharding Redis would reintroduce the same multiplication at a larger scale.
+
+## D19 — Circuit breakers count consecutive failures and admit one probe
+
+**Decision.** Per-tier breakers. Open after N *consecutive* failures, then admit
+exactly one probe per cooldown.
+
+**Why consecutive rather than a rate.** A tier failing once an hour is not
+broken, and a rate window needs traffic to decay before it recovers. Two
+failures in a row on a local model almost always means the model is gone.
+
+**Why one probe.** Without a probe a breaker that opens never closes. Admitting
+only one stops a recovering tier being immediately flooded by everything that
+queued up behind the outage.
+
+**What it buys.** Measured against a hanging frontier at a 3 s timeout:
+**3193 ms → 42 ms** once open. Against a *connection-refused* tier the clock
+barely moves, because refused is already fast — there the value shows up as
+`short_circuited` in `/healthz` rather than as latency. Worth knowing before
+quoting the speedup.
+
+**Revisit if.** Tiers start failing intermittently rather than cleanly; a
+consecutive-failure counter tolerates flapping better than a rate, but neither
+is right for a tier that fails 40% of the time.
+
+## D20 — Retries are narrow, and never re-bill the frontier
+
+**Decision.** Retry only timeouts and connection errors, twice by default, with
+full jitter. The frontier is **not** retried on timeout unless
+`retry_billable=true`.
+
+**Why.** A frontier call that timed out may still have been processed and
+billed. Retrying it pays twice for one answer, which is exactly the cost this
+project exists to control. A connection error is safe because the request never
+landed.
+
+Full jitter because without it N clients that failed together retry together and
+reproduce the herd that caused the failure.
+
+**Revisit if.** A provider offers idempotency keys — then billable retries
+become safe and the flag can default on.
+
+## D21 — Ollama is not containerised
+
+**Decision.** The Dockerfile and compose file ship the gateway, Redis and the
+mock frontier. Ollama stays a host service, reached via `OLLAMA_BASE_URL`.
+
+**Why.** Ollama needs the host's GPU/Metal and its own model storage. Putting it
+in the compose file would work and would silently give you **CPU-only
+inference** — a container that runs correctly while being ten times slower is a
+worse outcome than one that refuses to start.
+
+**Consequence.** `docker compose up` is not sufficient on its own; `ollama serve`
+must already be running on the host. That is stated in the compose file rather
+than discovered.
+
+**Revisit if.** Deploying to a Linux host with GPU passthrough configured, where
+the container can actually reach the accelerator.

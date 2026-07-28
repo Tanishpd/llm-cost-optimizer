@@ -21,12 +21,13 @@ Constraints that shaped the design (all verified — see RESEARCH.md):
 - **8 GB RAM** → the binding constraint, measured. Caps local models at 3B–4B. `mistral:7b` from the
   original spec is excluded on RAM, not disk.
 - **Redis 7.2.7 with no modules** → no vector index. Brute-force numpy cosine — calculated
-  sub-millisecond to ~10k entries, a few ms at 100k. Not yet benchmarked.
-- **Ollama 0.30.10 *should* expose logprobs** → confirmed by reading the Ollama source
-  (RESEARCH.md §2), **not yet observed on this machine**. M0 exists to verify it and carries a
-  fallback (`CONFIDENCE_STRATEGY=self_consistency`) if it doesn't hold.
-- **Disk being freed toward ~20 GB** (7.9 GB as of 2026-07-27, up from 3.2 GB) → room for two local
-  models, so the cascade gets a second gate.
+  sub-millisecond to ~10k entries, a few ms at 100k. The measured semantic tier p50 is 40 ms
+  end-to-end, but that is dominated by the embedding call, not the matmul.
+- **Ollama 0.30.10 exposes logprobs** → **verified on this machine in M0** (RESEARCH.md §2), which is
+  what the whole cascade rests on. The fallback (`CONFIDENCE_STRATEGY=self_consistency`) survives for
+  the case where a future model or backend doesn't provide them.
+- **Disk ~32 GB free as of 2026-07-28**, reclaimed from 3.2 GB → room for two local models, so the
+  cascade gets a second gate.
 
 ---
 
@@ -271,6 +272,108 @@ escalate everything and say so; a model not pulled → skip that tier with a rea
 degraded gateway must still answer. Add trace IDs, timeouts, single-flight stampede protection, and
 `scripts/demo.py` walking all five tiers with a savings summary.
 
+
+### M9 — Auth, limits, CI ✅ DONE (2026-07-28)
+
+The gateway spends money per request, and until M9 anyone who could reach the
+port could spend it. Probed before and after on a running instance:
+
+| Probe | Before | After |
+|---|---|---|
+| No credentials | 200 | **401** |
+| `/metrics` unauthenticated | 200 — cost data exposed | **401** |
+| 400 KB prompt | 200, 9.2 s | **413** |
+| `max_tokens: 999999` | accepted | clamped, reported in `x_hlr.degraded` |
+| 6 rapid requests, cap 5 | all 200 | `200 200 200 200 429 429` |
+
+`app/security.py` holds auth, rate limiting and request bounds. CI runs unit
+tests on 3.12 and 3.14, ruff, and `scripts/check_docs.py`. The unit suite is
+re-run behind a dead proxy so it stays hermetic.
+
+CI failed on its first run and caught a real portability bug: the suite only
+worked under `python -m pytest`, because only that form puts the CWD on
+`sys.path`. Bare `pytest` — what CI and most editors run — could not import
+`app` at all.
+
+### M10 — Production hardening ✅ DONE (2026-07-28)
+
+Three parts, each verified rather than asserted.
+
+**Multi-worker.** The docs had claimed "correct in principle but untested"
+since M1. One piece was not correct in principle either: the rate limiter kept
+its window in process memory, so N workers each enforced their own and a
+configured 60/min silently became 60N. Moved to a Redis sorted set behind one
+Lua script. Verified with 4 real worker processes:
+
+    rate limit      20 requests, shared cap 10  -> exactly 10 allowed
+    semantic index  indexed by one worker       -> 8/8 lookups hit
+    single flight   8 concurrent identical      -> 1 model call
+
+**Resilience.** `app/resilience.py` adds circuit breakers and narrow retries.
+The failure they address: when a tier *hangs*, every request waits out its full
+timeout before escalating. Against a black-hole frontier at a 3 s timeout,
+**3193 ms → 42 ms** once the circuit opened. Retries cover only timeouts and
+connection errors, and the frontier is not retried on timeout because the
+tokens may already be billed. Structured logging via `LOG_FORMAT=json`, trace
+id attached from a `ContextVar`.
+
+**Deployment and load.** Multi-stage Dockerfile (non-root), compose file,
+`/livez` and `/readyz` split from `/healthz`, and `scripts/loadtest.py`.
+
+The load test found a real bug on its first run: per-request costs were rounded
+to whole micro-USD before being summed, so the identity `/metrics` is supposed
+to satisfy exactly held only approximately — a 75 micro-USD gap over 200
+requests. Aggregates now derive from the exactly-summed integer token counters,
+making the identity true by construction. After the fix:
+
+    200 req @ concurrency 16   200/200 ok   75 req/s    8 model calls
+    500 req @ concurrency 48   500/500 ok   75 req/s   18 model calls
+    p50 28ms  p95 2069ms  p99 4853ms   worker RSS 10 MB
+
+**The calibrated path was a knob with nothing behind it.** Auditing the docs
+against the code turned up the worst kind of bug — one that only fires when you
+change a setting, and reports success while doing so. `CONFIDENCE_MODE=calibrated`
+was documented and settable, but nothing ever loaded `eval/calibrator.json`
+into serving: `cascade.execute()` accepted a `calibrators` dict that `main.py`
+never passed. The gates fell back to raw thresholds while `x_hlr.confidence_mode`
+reported `calibrated`.
+
+Underneath it was a second, quieter defect. `eval/calibration.Calibrator`
+standardizes features before applying weights; the serving-side
+`app.confidence.LogisticCalibrator` had no `mean`/`scale` at all. Even once
+loaded, it would have applied standardized-space weights to raw features and
+returned a number in [0, 1] that looks exactly like a probability and is not
+one. Nothing downstream could have detected that.
+
+Both fixed: `CALIBRATOR_PATH` is read once in the lifespan, standardization
+travels with the weights, a feature-order mismatch raises instead of scoring,
+and `CONFIDENCE_MODE=calibrated` with no calibrators **refuses to start** — the
+same rule as `REQUIRE_AUTH`, for the same reason. A test asserts the serving
+calibrator and the eval calibrator produce bit-identical probabilities, so the
+validated ECE describes the model that actually routes.
+
+This is a fair criticism of M6: a mode that is fitted and validated but never
+*executed* is not finished. It was invisible because the shipped default is
+`raw` and gate `large` failed validation, so nothing ever exercised the path.
+
+Verified against live models with `CONFIDENCE_MODE=calibrated`, and the
+calibrator is visibly doing work rather than echoing `geo_mean`:
+
+    "capital of France, one word"        gate small  P=0.9891  vs 0.92  -> accept
+    "why is the sky blue then red"       gate small  P=0.1320  vs 0.92  -> escalate
+                                           (geo_mean 0.4751 — a different number)
+                                         gate large  P=0.1198  vs 0.85  -> escalate
+                                           (geo_mean 0.5519)
+                                         served by frontier
+
+    CONFIDENCE_MODE=calibrated CALIBRATOR_PATH=/nonexistent.json
+      -> RuntimeError: ... refusing to start and report a confidence the gates
+         are not actually using.
+
+This does **not** change the shipped default. Gate `large` still failed M6, so
+`raw` remains correct; what changed is that flipping the switch now does what
+the switch says.
+
 ---
 
 ## Configuration surface
@@ -310,6 +413,7 @@ degraded gateway must still answer. Add trace IDs, timeouts, single-flight stamp
 | `SEMANTIC_THRESHOLD` | `0.95` | Cosine floor; conservative on purpose |
 | `SEMANTIC_MAX_CHARS` | `500` | Above this, skip semantic caching |
 | `CONFIDENCE_MODE` | `raw` | `raw` \| `calibrated` |
+| `CALIBRATOR_PATH` | `eval/calibrator.json` | Read once at startup. Absent is fine in `raw`; absent in `calibrated` refuses to start rather than silently serving raw thresholds under a calibrated label |
 | `THRESHOLD_SMALL` | `0.55` | Gate 1, `geo_mean`, raw mode. **Not comparable to `THRESHOLD_LARGE`** — different model, different distribution |
 | `THRESHOLD_LARGE` | `0.62` | Gate 2, `geo_mean`, raw mode |
 | `TARGET_SMALL` | `0.92` | Gate 1 acceptance probability, calibrated mode. Higher than gate 2 on purpose — escalating from here is nearly free |

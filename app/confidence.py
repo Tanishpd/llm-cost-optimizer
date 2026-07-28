@@ -27,6 +27,20 @@ from typing import Any, Literal, Protocol
 # 0.5 is the natural cut: the model was less than even-odds on this token.
 LOW_PROB = 0.5
 
+# The fixed feature order every calibrator is fitted against. It must match
+# `ConfidenceMetrics.feature_vector()` and `eval/calibration.FEATURE_NAMES`;
+# `calibrators_from_dict` refuses to load a fit that disagrees, because a
+# reordered vector produces plausible-looking nonsense rather than an error.
+FEATURE_NAMES: tuple[str, ...] = (
+    "geo_mean",
+    "min_prob",
+    "p10_prob",
+    "mean_margin",
+    "mean_norm_entropy",
+    "frac_low",
+    "n_tokens",
+)
+
 # Phrases that mean "escalate regardless of score". A model can be fluently,
 # confidently uncertain — high geo_mean while explicitly refusing — so these
 # are checked independently of the metrics. Cheap and high-precision.
@@ -255,33 +269,72 @@ class LogisticCalibrator:
 
     weights: list[float]
     bias: float
+    # The fit standardizes features first (n_tokens spans 1..600, geo_mean
+    # 0..1 — un-standardized, the fit is dominated by whichever feature has
+    # the largest units). The weights are therefore in standardized space and
+    # are MEANINGLESS applied to raw features, so these travel with them.
+    # Empty means "already raw", which is only true of a hand-built calibrator.
+    mean: list[float] = field(default_factory=list)
+    scale: list[float] = field(default_factory=list)
     # Recorded so a request at a different temperature can be flagged as
     # out-of-calibration rather than silently scored — logprob distributions
     # shift with temperature.
     fitted_temperature: float = 0.0
-    feature_names: tuple[str, ...] = field(
-        default=(
-            "geo_mean",
-            "min_prob",
-            "p10_prob",
-            "mean_margin",
-            "mean_norm_entropy",
-            "frac_low",
-            "n_tokens",
-        )
-    )
+    n_train: int = 0
+    feature_names: tuple[str, ...] = FEATURE_NAMES
 
     def predict_proba(self, features: list[float]) -> float:
         if len(features) != len(self.weights):
             raise ValueError(
                 f"calibrator expects {len(self.weights)} features, got {len(features)}"
             )
-        z = sum(w * x for w, x in zip(self.weights, features, strict=True)) + self.bias
+        x = features
+        if self.mean and self.scale:
+            if len(self.mean) != len(x) or len(self.scale) != len(x):
+                raise ValueError("calibrator mean/scale do not match the feature vector")
+            x = [(v - m) / s for v, m, s in zip(x, self.mean, self.scale, strict=True)]
+        z = sum(w * v for w, v in zip(self.weights, x, strict=True)) + self.bias
         # Numerically stable sigmoid.
         if z >= 0:
             return 1.0 / (1.0 + math.exp(-z))
         exp_z = math.exp(z)
         return exp_z / (1.0 + exp_z)
+
+
+def calibrators_from_dict(data: dict[str, Any]) -> dict[str, LogisticCalibrator]:
+    """Deserialize the contents of `eval/calibrator.json`, keyed by gate id.
+
+    Takes the already-parsed dict rather than a path, so this module keeps its
+    no-I/O property; `app/main.py` does the read in the lifespan.
+
+    Raises rather than skipping on a malformed or mismatched fit. A calibrator
+    silently treated as absent would send serving back to raw thresholds while
+    `x_hlr.confidence_mode` kept reporting `calibrated` — the exact class of
+    confidently-wrong metadata this project is organized against.
+    """
+    out: dict[str, LogisticCalibrator] = {}
+    for gate, raw in (data.get("calibrators") or {}).items():
+        names = tuple(raw.get("feature_names") or FEATURE_NAMES)
+        if names != FEATURE_NAMES:
+            raise ValueError(
+                f"calibrator {gate!r} was fitted on {names}, but this build computes "
+                f"{FEATURE_NAMES}. Refit with eval/run_eval.py."
+            )
+        weights = [float(w) for w in raw["weights"]]
+        if len(weights) != len(FEATURE_NAMES):
+            raise ValueError(
+                f"calibrator {gate!r} has {len(weights)} weights for "
+                f"{len(FEATURE_NAMES)} features"
+            )
+        out[gate] = LogisticCalibrator(
+            weights=weights,
+            bias=float(raw["bias"]),
+            mean=[float(v) for v in raw.get("mean") or []],
+            scale=[float(v) for v in raw.get("scale") or []],
+            fitted_temperature=float(raw.get("fitted_temperature") or 0.0),
+            n_train=int(raw.get("n_train") or 0),
+        )
+    return out
 
 
 def score(

@@ -11,7 +11,7 @@ from decimal import Decimal
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -35,7 +35,9 @@ class Settings(BaseSettings):
 
     # ---- Frontier tier ---------------------------------------------------
     frontier_base_url: str = "http://localhost:8001/v1"
-    frontier_api_key: str = "mock-key"
+    # SecretStr so it renders as `**********` in any repr, log line, or exception
+    # that happens to carry a Settings object. Read it with .get_secret_value().
+    frontier_api_key: SecretStr = SecretStr("mock-key")
     frontier_model: str = "gpt-4o-mock"
     frontier_timeout_s: float = 60.0
     # USD per 1M tokens. PLACEHOLDERS — verify current rates before quoting any
@@ -58,6 +60,9 @@ class Settings(BaseSettings):
 
     # ---- Confidence gating -----------------------------------------------
     confidence_mode: Literal["raw", "calibrated"] = "raw"
+    # Where the fitted per-gate calibrators live. Read once at startup; missing
+    # is fine in raw mode, fatal in calibrated mode (app/main.py).
+    calibrator_path: str = "eval/calibrator.json"
     # Raw-mode thresholds are PER-MODEL and not comparable to each other: the
     # 0.5B's geo_mean distribution sits lower than the 3B's (measured 0.47 vs
     # 0.60 on the same medium prompt). The ordering is an artifact of the
@@ -82,7 +87,7 @@ class Settings(BaseSettings):
     eval_use_real_frontier: bool = False
     eval_judge_base_url: str = "https://api.anthropic.com/v1"
     eval_judge_model: str = "claude-sonnet-5"
-    eval_judge_api_key: str = ""
+    eval_judge_api_key: SecretStr = SecretStr("")
 
     # ---- Security --------------------------------------------------------
     # Comma-separated. Empty means the gateway runs OPEN, which is only

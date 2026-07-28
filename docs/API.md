@@ -1,7 +1,6 @@
 # API Contract
 
-The HTTP surface the gateway exposes. This is the contract M1–M8 are built against — if the code and
-this document disagree, one of them is a bug. Related: [PLAN.md](PLAN.md) for milestones,
+The HTTP surface the gateway exposes. If the code and this document disagree, one of them is a bug. Related: [PLAN.md](PLAN.md) for milestones,
 [RESEARCH.md](RESEARCH.md) for the upstream API shapes this wraps.
 
 Base URL: `http://localhost:8000`
@@ -11,9 +10,59 @@ Base URL: `http://localhost:8000`
 | `/v1/chat/completions` | POST | Main entry point. OpenAI-compatible. |
 | `/route` | POST | Routing decision only — no model is called. |
 | `/metrics` | GET | JSON aggregates for the dashboard. |
-| `/healthz` | GET | Liveness + per-dependency status. |
+| `/metrics/recent` | GET | Live request log, newest first. |
 | `/dashboard` | GET | Self-contained HTML dashboard. |
-| `/cache` | DELETE | Flush cache tiers (dev convenience). |
+| `/cache` | DELETE | Flush both cache tiers (dev convenience). |
+| `/healthz` | GET | Full dependency detail. **Public.** |
+| `/livez` | GET | Liveness — is the process up. **Public.** |
+| `/readyz` | GET | Readiness — can this instance serve *now*. **Public.** |
+
+---
+
+## Authentication
+
+Send an API key as either header:
+
+```
+Authorization: Bearer sk-...
+X-API-Key: sk-...
+```
+
+Keys come from `GATEWAY_API_KEYS` (comma-separated) and are compared in constant
+time. **An empty `GATEWAY_API_KEYS` means the gateway runs open** — acceptable
+on a loopback bind, and startup warns loudly. `REQUIRE_AUTH=true` turns an open
+start into a hard failure, because a config that silently disables auth while
+claiming to enforce it is worse than a crash.
+
+`/healthz`, `/livez`, `/readyz`, `/`, and the OpenAPI routes are **public** — a
+load balancer has no credentials, and none of them expose traffic or cost data.
+Everything else, `/metrics` and `/dashboard` included, requires a key.
+
+### Limits
+
+Applied before any model runs, so an abusive request costs a string comparison
+rather than a generation:
+
+| Limit | Setting | Exceeded → |
+|---|---|---|
+| Request body bytes | `MAX_BODY_BYTES` (256 000) | **413** `request_too_large` |
+| Prompt characters | `MAX_PROMPT_CHARS` (32 000) | **413** `prompt_too_long` |
+| Message count | `MAX_MESSAGES` (50) | **413** `too_many_messages` |
+| Requests per minute | `RATE_LIMIT_PER_MINUTE` (60) | **429** `rate_limited` + `Retry-After` |
+| Output tokens | `MAX_OUTPUT_TOKENS` (4096) | **clamped**, not rejected |
+
+`max_tokens` is clamped rather than refused: a caller asking for more almost
+always means "as much as you'll give me". The clamp appears in
+`x_hlr.degraded` as `max_tokens_clamped`, so nobody is misled about what they
+got.
+
+The rate-limit window lives in Redis (a sorted set behind one Lua script), so
+it is shared across workers. If Redis is unreachable it falls back to
+per-process state and says so — the effective limit then multiplies by worker
+count, which is worse than shared and far better than none.
+`/healthz` reports `config.rate_limit_distributed` so you can tell which is live.
+
+Successful responses carry `X-RateLimit-Remaining`.
 
 ---
 
@@ -299,6 +348,41 @@ not unhealthy.
 
 ---
 
+## GET /livez
+
+Liveness. Is the process up — nothing else.
+
+```json
+{"status": "alive"}
+```
+
+**Deliberately dependency-free.** A liveness probe that checks Redis will
+restart a healthy gateway during a Redis blip, turning a degradation into an
+outage — the opposite of what the probe is for. The container `HEALTHCHECK`
+uses this endpoint for the same reason.
+
+---
+
+## GET /readyz
+
+Readiness. Can *this instance* serve a request right now?
+
+```json
+{"status": "ready", "ollama": true, "frontier": true, "detail": ""}
+```
+
+**200** when at least one model tier is reachable, **503** otherwise. Stricter
+than `/healthz`: an instance with no reachable tier should be pulled from the
+load balancer even though the process is fine, and returned on recovery without
+a restart.
+
+The split matters. `/healthz` answers "what is the state of everything",
+`/livez` answers "should you restart me", `/readyz` answers "should you send me
+traffic". Collapsing them means a Redis blip either restarts a healthy process
+or keeps routing to a broken one.
+
+---
+
 ## Errors
 
 Errors also carry `x_hlr`, so a failure is as traceable as a success.
@@ -323,9 +407,18 @@ Invariant 1.
 |---|---|---|
 | 400 | `invalid_request` | Malformed body, empty `messages` |
 | 400 | `unsupported_streaming` | `stream: true` |
+| 401 | `unauthorized` | Missing or invalid API key. Carries `WWW-Authenticate: Bearer` |
 | 404 | `model_not_found` | Reserved `model` value naming a tier that isn't configured |
-| 503 | `all_tiers_down` | Neither Ollama nor the frontier is reachable |
+| 413 | `request_too_large` | Body over `MAX_BODY_BYTES` |
+| 413 | `prompt_too_long` | Prompt over `MAX_PROMPT_CHARS` |
+| 413 | `too_many_messages` | More than `MAX_MESSAGES` |
+| 429 | `rate_limited` | Window exhausted. Carries `Retry-After` |
+| 503 | `all_tiers_down` | No tier is reachable |
 | 504 | `upstream_timeout` | Every tier exceeded its timeout |
+
+401, 413 and 429 are raised in middleware **before** the handler, so they do not
+carry the full `x_hlr` block — there is no routing decision to report on a
+request that never reached the router.
 
 **Not errors — these degrade instead:** Redis unreachable (caching off), one local model missing
 (that tier is skipped, `reason` names the `ollama pull` to run), embedder missing (semantic cache off).

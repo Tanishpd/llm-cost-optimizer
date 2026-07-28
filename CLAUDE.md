@@ -25,26 +25,28 @@ claim is treated as empirical — `eval/` measures it rather than assuming it.
 
 ## Environment constraints — non-negotiable
 
-Verified 2026-07-27. These are the reason the architecture looks the way it does. Do not design
-around imagined constraints; design around these.
+Re-measured 2026-07-28. These are the reason the architecture looks the way it does. Do not design
+around imagined constraints; design around these — and **re-measure rather than trusting these
+numbers**, which is what `scripts/preflight.py` is for.
 
-- **8 GB RAM. This is the binding constraint, and it cannot be relieved.** It also caps worker
-  count: each worker holds its own numpy replica and HTTP pool, so 2–4 workers is the practical
-  ceiling here, not the 1 the docs previously assumed.
-- **8 GB RAM (cont.)** Local models are capped at
-  3B–4B. `mistral:7b` (~4.8 GB resident, estimated) will thrash — excluded on RAM, not disk. Keep
+- **8 GB RAM. This is the binding constraint, and it cannot be relieved.** Local models are capped
+  at 3B–4B. `mistral:7b` (~4.8 GB resident, estimated) will thrash — excluded on RAM, not disk. Keep
   `OLLAMA_MAX_LOADED_MODELS=2`; three resident models plus a browser will swap.
-- **Disk: target ~20 GB free. Measured 7.9 GB (97% full) as of 2026-07-27**, up from 3.2 GB — being
-  reclaimed, not yet at target. RESEARCH.md §7 lists what's reclaimable. `scripts/preflight.py` gates
-  on this; **verify with `df -h /System/Volumes/Data` before pulling models** rather than assuming
-  headroom exists.
-- **Swap was 90% full at 3.2 GB disk; 71% at 7.9 GB.** Swap lives on disk, so the two constraints are
-  coupled — this is why disk headroom matters beyond storing weights.
+- **RAM also caps worker count.** Each uvicorn worker holds its own numpy replica and HTTP pool, so
+  2–4 is the practical ceiling here. Measured RSS is ~10 MB per worker under load, so the ceiling is
+  about the models, not the gateway.
+- **Disk: 32 GB free (85% used) as of 2026-07-28**, up from 3.2 GB after a deliberate reclaim. At
+  target. Do not treat the headroom as spare capacity to fill — ~3 GB is this project and the rest is
+  swap room. **Verify with `df -h /System/Volumes/Data` before pulling models.**
+- **Swap: 3.3 GB of 4.0 GB used (81%).** Swap lives on disk, so the two constraints are coupled —
+  that is why disk headroom matters beyond storing weights. It was 90% at 3.2 GB free disk.
 - **No torch, `transformers`, or `sentence-transformers`.** Not a disk limit any more — Ollama
   already serves embeddings over HTTP, so torch would add a second inference runtime competing for
   the same scarce RAM. Runtime Python is **numpy-only** for math; `scikit-learn` is eval-only.
 - **Redis 7.2.7, no modules.** No `FT.*`, no RedisJSON, no vector index. Brute-force numpy cosine.
-- **No Docker daemon.** Nothing may require a container.
+- **No Docker daemon on this machine.** Nothing may *require* a container, and you cannot verify the
+  `Dockerfile`/`docker-compose.yml` locally — CI builds and smoke-tests the image. Don't claim a
+  container change works because it looks right.
 - **Python 3.14.6** is the target and every dependency has arm64 wheels for it.
 
 If a change would violate one of these, stop and raise it rather than working around it silently.
@@ -80,12 +82,26 @@ everything. Use `geo_mean = exp(mean(logprob_i))`, which is length-invariant (= 
 derivation in RESEARCH.md §3.
 
 **The 85% threshold.** The spec says "escalate below 85% confidence." Raw `geo_mean` on a small model
-sits around an expected 0.5–0.75 *even when correct* (a prior, not yet measured here — RESEARCH.md
-§3), because of normal lexical freedom. Shipping `0.85` against
-the raw metric escalates nearly everything and looks broken. Two modes exist for this reason:
-`CONFIDENCE_MODE=raw` (thresholds 0.55 / 0.62 on `geo_mean`) until `eval/run_eval.py` fits the
-calibrators, then `CONFIDENCE_MODE=calibrated` where 0.85 genuinely means "85% chance this tier's
-answer is as good as the frontier's". Don't collapse these two modes into one.
+sits around 0.5–0.75 *even when correct* — **measured**, RESEARCH.md §3.1 — because of normal lexical
+freedom. Shipping `0.85` against the raw metric escalates nearly everything and looks broken. Two
+modes exist for this reason: `CONFIDENCE_MODE=raw` (thresholds 0.55 / 0.62 on `geo_mean`), and
+`CONFIDENCE_MODE=calibrated` where 0.85 genuinely means "85% chance this tier's answer is as good as
+the frontier's". Don't collapse these two modes into one.
+
+**M6 ran and the answer was "stay in raw."** Gate `small` passed validation; gate `large` failed —
+good ECE (0.047, better than gate `small`'s) but no better than the base rate on Brier, i.e.
+calibrated without being useful. RESEARCH.md §3.4. Do not flip the default without re-running
+`eval/run_eval.py` and getting `should_flip() == True`.
+
+**The calibrated path is wired but not exercised by default**, which is exactly how it silently
+rotted once: `CONFIDENCE_MODE=calibrated` was settable while `main.py` never loaded
+`eval/calibrator.json`, so the gates used raw thresholds under a `calibrated` label. If you touch
+`confidence.py` or the lifespan, keep the tests in `tests/test_cascade.py` under "calibrated mode"
+green — they are the only thing executing that path.
+
+**Calibrator weights are in standardized space.** `mean`/`scale` travel with them and must be
+applied before the dot product. Skipping that step yields a number in [0, 1] that looks like a
+probability and is not one — nothing downstream can detect it.
 
 **Two gates, two calibrators.** Gate 1 (`small`, 0.5B → 3B) and gate 2 (`large`, 3B → frontier) are
 *not* the same decision and must not share fitted parameters. `eval/calibrator.json` holds one
@@ -94,9 +110,8 @@ parameter set per gate.
 **Raw-mode thresholds are not comparable across gates.** `THRESHOLD_SMALL=0.55` and
 `THRESHOLD_LARGE=0.62` apply to different models, whose `geo_mean` distributions differ — the 0.5B
 scores systematically lower than the 3B on the same prompt. So the ordering of those two numbers
-carries *no* economic meaning; they're per-model starting points, to be replaced by measurement in
-M6. Do not write prose claiming the ordering encodes a policy — an earlier draft did, and it was
-backwards.
+carries *no* economic meaning; they're per-model starting points. Do not write prose claiming the
+ordering encodes a policy — an earlier draft did, and it was backwards.
 
 **The economics only apply in calibrated mode**, where both scores are comparable probabilities.
 There the argument is: escalating from gate 1 costs ~450 ms and no money, so gate 1 should demand a
@@ -108,12 +123,12 @@ number, on the gate that actually spends. **Gate 1's bar is higher than gate 2's
 executor walks it from the router's entry point. Adding or reordering a tier is a data change. Never
 reintroduce nested if/else routing — that's what the ordering exists to prevent.
 
-**Ollama logprobs.** Confirmed in the Ollama source (v0.12.11+; installed client is 0.30.10) but
-not yet observed on this machine — M0 verifies it before anything is built on it. Request
-`"logprobs": true, "top_logprobs": 5` with **`"stream": false`** — the non-streaming path accumulates
-all chunks' logprobs into the final response, which is what the gate needs. `top_logprobs` must be
-0–20 or the server 400s. GitHub issue #16117 is closed "not planned" and looks like a denial — the
-source disagrees; trust the source.
+**Ollama logprobs.** **Verified working on this machine in M0** (v0.30.10) — RESEARCH.md §2 has the
+captured response. Request `"logprobs": true, "top_logprobs": 5` with **`"stream": false`** — the
+non-streaming path accumulates all chunks' logprobs into the final response, which is what the gate
+needs. `top_logprobs` must be 0–20 or the server 400s. GitHub issue #16117 is closed "not planned"
+and reads like a denial; it is wrong. This was the project's single highest-risk assumption, which
+is why M0 existed to settle it before anything was built on top.
 
 **Embeddings endpoint.** Use `POST /api/embed` with `{"model":..., "input":...}` returning
 `{"embeddings": [[...]]}` — plural, array-of-arrays. The legacy `/api/embeddings` returns
@@ -156,6 +171,12 @@ every judgment call toward missing.
 | Response shape | `app/schemas.py` |
 | Metrics / dashboard | `app/telemetry.py`, `app/dashboard.py`, `static/dashboard.html` |
 | Recalibrate the thresholds | `eval/run_eval.py` → writes `eval/calibrator.json` |
+| Auth, request size bounds | `app/security.py` (+ `PUBLIC_PATHS` if adding an unauthenticated route) |
+| Rate limiting | `app/ratelimit.py` — Redis sorted set behind one Lua script |
+| Timeouts, retries, breakers | `app/resilience.py` — wraps any awaitable; knows nothing about tiers |
+| Log format / trace id | `app/logging_setup.py` |
+| Prove the docs still match | `scripts/check_docs.py` — add a check when you add an invariant |
+| Prove it survives load | `scripts/loadtest.py` — asserts cost identities, not just latency |
 
 ## Extending
 
@@ -207,6 +228,18 @@ uvicorn app.main:app --port 8000 --reload
 uvicorn mock_frontier.main:app --port 8001    # separate terminal
 ```
 
+Before opening a PR — all three run in CI, so run them here first:
+
+```bash
+.venv/bin/python -m pytest -m "not integration"   # hermetic; needs nothing running
+.venv/bin/ruff check app eval scripts mock_frontier tests
+.venv/bin/python scripts/check_docs.py            # imports app.config, needs the venv
+```
+
+`scripts/loadtest.py` needs a running gateway and is the only check that
+exercises the cost identities under concurrency — run it after touching
+`telemetry.py`, `costs.py`, or anything in `cache/`.
+
 **Multi-worker is supported and verified** (M10). All shared state lives in Redis:
 
 | State | Mechanism | Verified with 4 workers |
@@ -224,8 +257,10 @@ which is worse than shared but far better than none.
 
 ## Current state
 
-**M0–M8 complete (2026-07-28).** The gateway runs: all five tiers, both gates, eval harness,
-dashboard. 456 unit + 6 integration tests. `python3 scripts/demo.py` walks every tier.
+**M0–M10 complete (2026-07-28).** The gateway runs and is hardened: all five tiers, both gates, eval
+harness, dashboard, auth, shared rate limiting, circuit breakers, structured logging, container
+image. **573 unit + 8 integration tests**, 97 doc-consistency checks. `python3 scripts/demo.py`
+walks every tier.
 
 **Shipping in `raw` confidence mode, not `calibrated`** — M6 fitted both calibrators and gate
 `large` failed its validation (good ECE, but no better than the base rate on Brier, i.e. calibrated
@@ -240,5 +275,10 @@ Measured, and now recorded in RESEARCH.md §3.1–3.2:
   and the gate accepted it at the 0.55 default — a demonstrated false-cheap. Read §3.2 before
   touching the gating logic; it constrains what any single-statistic threshold can achieve.
 
-Next: **M1** in [docs/PLAN.md](docs/PLAN.md) — skeleton gateway, `providers/ollama.py`, cost
-accounting.
+**Nothing is queued.** Deliberately not built, and each is a real gap rather than an oversight:
+buffer-then-stream (D8), a real-frontier calibration run (needs a key and a few dollars), per-tenant
+budgets (auth is per-key but every key draws on the same spend), and a durable audit trail
+(telemetry is a capped stream).
+
+Before changing anything, run `.venv/bin/python scripts/check_docs.py` — it enforces the
+cross-document invariants below, and it has caught drift four times.

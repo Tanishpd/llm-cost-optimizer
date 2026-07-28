@@ -32,9 +32,18 @@ prompts the router would send straight to frontier, how many would a local gate 
 
 ```
                     ┌────────────────────────────────────────────────────────┐
-  POST              │  FastAPI handler — assigns trace_id, starts the clock  │
-  /v1/chat/         └───────────────────────────┬────────────────────────────┘
-  completions                                   │
+  POST              │  enforce_access — auth, body/prompt bounds, rate limit │
+  /v1/chat/         │  rejects here never reach a model:  401 / 413 / 429    │
+  completions       └───────────────────────────┬────────────────────────────┘
+                                                │
+                    ┌───────────────────────────▼────────────────────────────┐
+                    │  add_trace_id — ContextVar, echoed in every log line   │
+                    └───────────────────────────┬────────────────────────────┘
+                                                │
+                    ┌───────────────────────────▼────────────────────────────┐
+                    │  FastAPI handler — starts the clock                    │
+                    └───────────────────────────┬────────────────────────────┘
+                                                │
                                                 ▼
                     ┌──────────────────────────────────────────┐
                     │  cache/keys.py                           │
@@ -87,6 +96,12 @@ Two properties worth naming:
   is cheap but not free.
 - **The write-through is on every path.** Frontier answers are cached with a longer TTL
   (`CACHE_TTL_FRONTIER`) than local ones — an expensive answer is worth more shelf space.
+- **Access control runs before anything expensive.** Auth, size bounds and the rate limit are
+  middleware, so a rejected request costs a Redis round-trip and nothing else. It also means those
+  three responses (401/413/429) are the only ones without a full `x_hlr` block — no tier ran, so
+  there is no routing story to tell.
+- **Every tier call is wrapped** by `resilience.call_with_resilience`, which owns the timeout, the
+  retry policy and the circuit breaker. The cascade executor doesn't know any of that exists.
 
 ## 3. Component map
 
@@ -104,10 +119,20 @@ Two properties worth naming:
 | `cache/semantic.py` | T1 index, cosine, guards | Which model answers |
 | `costs.py` | Token → USD (pure) | Who called it |
 | `telemetry.py` | Records and aggregates | Business logic |
+| `security.py` | Key auth, request bounds, public paths | Redis, tiers |
+| `ratelimit.py` | Shared sliding window (Redis Lua) | What is being limited |
+| `resilience.py` | Timeouts, retries, circuit breakers | Which tier it is wrapping |
+| `logging_setup.py` | JSON formatter, trace `ContextVar` | Everything |
+| `dashboard.py` | Serves `static/dashboard.html` | How metrics are computed |
 
 The "does not know about" column is the actual design. Each module is testable without standing up
 the ones beside it, and `confidence.py` in particular is pure functions over a logprob array — the
 piece most worth unit-testing is the piece with no I/O in it.
+
+The bottom five are **cross-cutting and generic on purpose**. `resilience.py` wraps an arbitrary
+awaitable and knows nothing about tiers; `ratelimit.py` limits a string key. Had either been written
+against the cascade it would have been untestable without one, and reusing it for a sixth tier would
+mean editing it.
 
 ## 4. The cascade is data
 
@@ -136,7 +161,7 @@ is exactly what `x_hlr.path` reports back to the caller. See [D14](DECISIONS.md#
 | **Warm vector matrix** | **Process RAM (numpy)** | Process | **Replica.** Never authoritative |
 | Index version | Redis (`hlr:sem:version`) | Forever | INCR on write; replica re-syncs when it moves |
 | Telemetry | Redis stream, `MAXLEN ~ 10000` | Capped | |
-| Calibrator params | `eval/calibrator.json` on disk | Until refit | Loaded at startup |
+| Calibrator params | `CALIBRATOR_PATH` on disk | Until refit | Read once in the lifespan; absent is fatal in `calibrated` mode |
 | Model weights | Ollama's process, not ours | `keep_alive` | We never hold weights |
 
 The one subtle rule: **Redis is the source of truth and the numpy matrix is a warm replica.** The
@@ -176,13 +201,52 @@ capability, not availability.
 | Ollama down entirely | Everything escalates to frontier | `degraded: ["ollama_unavailable"]` |
 | Frontier down | Best local answer returned, gate verdict overridden | `degraded: ["frontier_unavailable"]` |
 | Logprobs unavailable | Fall back to `CONFIDENCE_STRATEGY=self_consistency` | `degraded: ["logprobs_unavailable"]` |
+| A tier keeps failing | Breaker opens; requests skip it instead of waiting out the timeout | `short_circuited` in `/healthz` |
 | **Everything down** | 503 `all_tiers_down` | The only real failure |
 
 The interesting one is *frontier down*. The gate said escalate, and escalation is impossible — so the
 gateway returns the local answer it already has, and says plainly in `reason` that it did. Returning a
 below-threshold answer while admitting it beats returning nothing.
 
+**Hanging is worse than failing**, which is what the breakers are actually for. A tier that refuses
+connections is already fast to fail; a tier that accepts and never replies makes every request pay
+the full timeout before escalating. Measured against a black-hole frontier at a 3 s timeout:
+**3193 ms → 42 ms** once the breaker opened. Recovery is one probe per cooldown — without a probe an
+open breaker never closes, and with unlimited probes a recovering tier gets flooded by everything
+queued behind the outage ([D19](DECISIONS.md)).
+
+Retries are narrow by design: timeouts and connection errors only, full jitter, and the frontier is
+never retried on timeout because those tokens may already be billed. Paying twice for one answer is
+precisely the cost this gateway exists to control ([D20](DECISIONS.md)).
+
 ## 8. Trust boundaries
+
+Three of them, in order of how badly each fails.
+
+### 8.1 The network edge
+
+Everything before the handler. The gateway spends money per request, so an open port is a spending
+authority. `enforce_access` runs first and rejects in this order — auth, then size, then rate —
+because each check is cheaper than the one after it and a request that fails auth shouldn't get its
+body measured.
+
+| Control | Enforces |
+|---|---|
+| `security.ApiKeyAuth` | Bearer / `X-API-Key`, constant-time compare, digest in logs never the key |
+| `security.RequestLimits` | `MAX_BODY_BYTES`, `MAX_PROMPT_CHARS`, `MAX_MESSAGES` → 413 |
+| `ratelimit.RedisRateLimiter` | `RATE_LIMIT_PER_MINUTE` per principal → 429 |
+| `security.PUBLIC_PATHS` | `/livez`, `/readyz`, `/healthz` only |
+
+Two deliberate softenings, both loud rather than silent: an empty key list runs the gateway **open**
+with a startup warning (`REQUIRE_AUTH=true` makes that a startup failure instead), and a rate limiter
+that can't reach Redis falls back to per-process counting and reports the degradation. Both are
+choices about *which* failure is worse, recorded in [D17](DECISIONS.md) and [D18](DECISIONS.md).
+
+`MAX_OUTPUT_TOKENS` is the odd one out — it clamps rather than rejects, and reports the clamp in
+`x_hlr.degraded`. An oversized `max_tokens` is almost always a client default, not an attack, and a
+clamped answer serves the caller better than a 413.
+
+### 8.2 The semantic cache
 
 The semantic cache is the one place the system can be **confidently wrong**. Every other failure mode
 is visible: a slow answer, a missing answer, an escalation. A false cache hit is a wrong answer served
@@ -203,6 +267,13 @@ cosine ≥ SEMANTIC_THRESHOLD        (0.95, deliberately high)
 Every rejection is recorded in `cache.guard_rejected` so over-conservatism is measurable rather than
 invisible. The asymmetry is deliberate: a miss costs ~120 ms, a false hit costs correctness. Bias
 every judgment call toward missing ([D15](DECISIONS.md#d15--bias-every-cache-judgment-toward-missing)).
+
+### 8.3 The frontier
+
+The only tier that costs money and the only one outside our control. It is treated as untrusted in
+both directions: its `usage` block is what gets billed, so it is recorded verbatim rather than
+recomputed from our own token counts, and its timeouts are never retried. `FRONTIER_API_KEY` is
+`SecretStr` and never appears in a log line or an `x_hlr` block.
 
 ## 9. Extension seams
 
@@ -225,7 +296,13 @@ Each is a place the design expects to change, with the interface already drawn:
   rather than pretending ([D8](DECISIONS.md#d8--non-streaming-first)).
 - **Worker count is capped by RAM, not by design.** Each worker holds its own numpy replica and
   HTTP pool; on 8 GB, 2–4 is the practical ceiling.
-- **No auth, tenancy, or rate limiting.** Single-user gateway.
+- **No tenancy.** Auth and rate limiting exist and are per-*key*, but a key is a credential, not an
+  account: there are no per-tenant budgets, quotas, or cost attribution. Every key draws on the same
+  frontier spend. Adding tenancy means a principal→budget map consulted before the frontier tier —
+  the seam is `ApiKeyAuth.principal_for`, which already resolves a stable digest per key.
+- **No persistent audit log.** Telemetry is a capped Redis stream (`MAXLEN ~ 10000`); old records are
+  dropped, not archived. Fine for a dashboard, not sufficient if the routing decisions ever need to
+  be reconstructed after the fact.
 - **No local-inference cost model.** Local tiers book $0. Electricity and amortized hardware are real
   but not meaningfully attributable per request, and a made-up number would look more rigorous while
   being less honest ([D13](DECISIONS.md#d13--local-inference-counted-as-0)).

@@ -3,10 +3,11 @@
 An API gateway that sits in front of several models of escalating cost and decides — per request —
 the cheapest one that will actually do the job.
 
-> **Status: M0–M8 complete. The gateway runs.**
+> **Status: M0–M10 complete. The gateway runs, and it's hardened.**
 > All five tiers, both confidence gates, the eval harness and the dashboard are built and working —
-> 456 unit tests plus 6 integration tests against live models. Run `python3 scripts/demo.py` to walk
-> every tier in one go.
+> **573 unit tests** (hermetic, no network) plus 8 integration tests against live models. Auth, rate
+> limiting, circuit breakers, structured logging and a container image are in. Run
+> `python3 scripts/demo.py` to walk every tier in one go.
 >
 > The one honest caveat: **the gateway ships in `raw` confidence mode, not `calibrated`.** M6 fitted
 > the calibrators and one of the two gates failed its validation, so 0.85 has not been earned yet.
@@ -119,7 +120,7 @@ baseline charges frontier prices for *every* request, including ones a cache ser
 "what would this traffic have cost with no gateway at all", which is the comparison that matters, but
 it does flatter the cache tiers. Rationale for both choices: [D13](docs/DECISIONS.md).
 
-`GET /metrics` gives aggregates; `GET /dashboard` will render them live — tier breakdown, cache hit
+`GET /metrics` gives aggregates; `GET /dashboard` renders them live — tier breakdown, cache hit
 rate, per-gate escalation rates, latency percentiles, and cumulative spend against the baseline.
 
 ### About that 85% threshold
@@ -134,9 +135,8 @@ length, not certainty.
 
 The fix is the **geometric mean** of token probabilities (equivalently, inverse perplexity), which is
 length-invariant. But even that isn't a probability of being *right* — a small model producing a
-perfectly correct answer is expected to score somewhere around 0.5–0.75 (a prior the build measures
-in M0, not yet a recorded figure), simply because language offers many valid ways to phrase the same
-thing.
+perfectly correct answer scores around 0.5–0.75 (M0 measured 0.55–0.75 across correct answers on the
+0.5B), simply because language offers many valid ways to phrase the same thing.
 
 So the gateway ships in two modes:
 
@@ -156,6 +156,10 @@ is trivially well-calibrated and carries no information. Brier-against-baseline 
 "calibrated" from "calibrated and useful", and the 3B's confidence didn't clear it on this sample.
 Shipping one measured gate beside one guessed gate would put both behind the same 0.85 label, so
 the gateway stays in `raw`. Full numbers in [RESEARCH.md §3.4](docs/RESEARCH.md). Full derivation in [docs/RESEARCH.md](docs/RESEARCH.md) §3.
+
+The calibrated path itself is wired and tested even though it isn't the default — flipping
+`CONFIDENCE_MODE` loads `CALIBRATOR_PATH` at startup and **refuses to start** if the fit is missing,
+rather than falling back to raw thresholds while still reporting `calibrated`.
 
 **And M0 already found the limit of the raw metric.** Asked when the Treaty of Kadesh was signed
 (really c. 1259 BC, Egypt and the Hittites), `qwen2.5:0.5b` answered *"1956 … between Egypt and
@@ -180,16 +184,18 @@ This machine has **8 GB of RAM**, which is a more interesting constraint than it
   estimated ~4.8 GB resident and would thrash. `mistral:7b` from the original spec is out for this
   reason. The practical ceiling is 3B–4B — which is why the design spends its RAM on a *two-model
   cascade* rather than one bigger model: two gates let the gateway decide how much compute a prompt
-  deserves, not just "local or not". Whether the 0.5B tier earns its place is an open question M6
-  answers; if gate 1 rarely accepts, the honest move is collapsing to a single local tier
-  ([D1](docs/DECISIONS.md)).
+  deserves, not just "local or not". The 0.5B earns its place: at the shipped threshold gate 1
+  escalates only 15% of the eval set, so the cheapest tier serves most traffic. D1's reversal
+  condition was gate 1 accepting <10% — it accepts 85% ([D1](docs/DECISIONS.md)).
 - **No PyTorch, no `transformers`, no `sentence-transformers`.** Ollama already serves embeddings
   over HTTP; a second inference runtime would compete for the same scarce memory. The Python side is
   numpy-only at runtime.
 - **Redis 7.2.7 with no modules** — no vector index available. Semantic search is brute-force cosine
   in numpy: an estimated sub-millisecond up to ~10k cached entries, a few milliseconds at 100k, which
   is where an index would start to pay. A demo cache won't approach either.
-- **No Docker.** Everything runs as local processes.
+- **No Docker daemon on the dev machine.** So everything runs as local processes here, and nothing in
+  the codebase may *require* a container. A `Dockerfile` and `docker-compose.yml` ship anyway for
+  deployment, built and smoke-tested in CI rather than locally — see [Containers](#containers).
 
 Total footprint: ~2.6 GB of models plus ~300 MB of Python dependencies.
 
@@ -227,7 +233,7 @@ Then open <http://localhost:8000/dashboard>.
 
 ### Try each tier
 
-*Intended behaviour once M0–M5 are built — these are the acceptance criteria, not recorded output.*
+`scripts/demo.py` walks all five in one run. By hand:
 
 ```bash
 H='content-type: application/json'
@@ -278,26 +284,115 @@ judge model for quality scoring — roughly 3 calls per prompt across ~120 promp
 from your actual rates before running; the price constants are placeholders. Every response is cached
 under `eval/runs/` so re-fitting calibrators never re-spends.
 
+## Running it for real
+
+### Authentication
+
+Set `GATEWAY_API_KEYS` to a comma-separated list and every request needs one, as either
+`Authorization: Bearer <key>` or `X-API-Key: <key>`. Comparison is constant-time; logs carry a short
+digest of the principal, never the key.
+
+```bash
+GATEWAY_API_KEYS=sk-local-abc123,sk-local-def456
+REQUIRE_AUTH=true          # refuse to start if the list above is empty
+```
+
+Leave the list empty and **the gateway runs open**, logging a loud warning at startup. That's the
+right default for the single-user quickstart and the wrong one for anything reachable — which is what
+`REQUIRE_AUTH` is for: it turns a silent misconfiguration into a startup failure. `/livez`, `/readyz`
+and `/healthz` stay public so an orchestrator can probe without a credential
+([D17](docs/DECISIONS.md)).
+
+### Limits
+
+Each is enforced in middleware, before any model is touched.
+
+| Setting | Default | Exceeded → |
+|---|---|---|
+| `MAX_BODY_BYTES` | 256000 | `413` |
+| `MAX_PROMPT_CHARS` | 32000 | `413` |
+| `MAX_MESSAGES` | 50 | `413` |
+| `RATE_LIMIT_PER_MINUTE` | 60 | `429` + `Retry-After` |
+| `MAX_OUTPUT_TOKENS` | 4096 | clamped, reported in `x_hlr.degraded` |
+
+The rate-limit window lives in a Redis sorted set behind a Lua script, so the cap is shared across
+workers rather than multiplied by them. If Redis is unreachable it degrades to per-process counting
+and says so in `/healthz` ([D18](docs/DECISIONS.md)).
+
+### Health
+
+| | Answers | Use for |
+|---|---|---|
+| `GET /livez` | is the process alive | container healthcheck, restart policy |
+| `GET /readyz` | can it serve — Ollama and at least one model reachable | load-balancer admission |
+| `GET /healthz` | full dependency detail, degraded modes, breaker states | humans and debugging |
+
+`/livez` deliberately does **not** test Redis or Ollama: a liveness probe that fails during a Redis
+blip converts a degradation into a restart loop.
+
+### Resilience
+
+Each tier sits behind a circuit breaker. After `BREAKER_FAILURE_THRESHOLD` consecutive failures it opens and
+requests skip straight past — measured against a frontier that accepts connections and never replies,
+at a 3 s timeout: **3193 ms → 42 ms**. One probe is admitted per cooldown to detect recovery.
+
+Retries cover timeouts and connection errors only, with full jitter, and the frontier is **not**
+retried on timeout — those tokens may already be billed ([D20](docs/DECISIONS.md)).
+
+Set `LOG_FORMAT=json` for structured logs; every line carries the request's trace id.
+
+### Containers
+
+```bash
+ollama serve &                 # on the HOST — not a compose service
+docker compose up --build
+```
+
+Ollama stays outside the compose network on purpose: it needs the host's GPU/Metal, and bundling it
+would silently give you CPU-only inference ([D21](docs/DECISIONS.md)). The gateway image is
+multi-stage and runs as a non-root uid.
+
+### Load
+
+```bash
+python3 scripts/loadtest.py --concurrency 48 --requests 500
+```
+
+Not a benchmark — it asserts things a smoke test can't: that nothing *fails* under concurrency, that
+the cost identities still reconcile after hundreds of requests, and that single-flight actually
+collapses duplicates.
+
+```
+500 req @ concurrency 48   500/500 ok   75 req/s   18 model calls for 8 distinct prompts
+p50 28ms   p95 2069ms   p99 4853ms      worker RSS 10 MB
+```
+
+Its first run found a real bug: per-request costs were rounded to whole micro-USD *before* summing,
+so a documented `/metrics` identity was off by 75 micro-USD over 200 requests. Aggregates now derive
+from exactly-summed integer token counters.
+
 ## Milestones
 
-Nine milestones, each independently runnable. M0 came first deliberately: it resolves the one
+Eleven milestones, each independently runnable. M0 came first deliberately: it resolves the one
 assumption everything else rests on, before anything is built on top of it.
 
 | | Milestone | State |
 |---|---|---|
-| **M0** | Verify logprobs; `confidence.py`; `preflight.py` | **done** — 37 tests, all checks green |
-| M1 | Skeleton gateway, Ollama provider, cost accounting | next |
-| M2 | Exact cache + telemetry | |
-| M3 | Pre-router | |
-| M4 | Confidence gates + escalation + mock frontier | |
-| M5 | Semantic cache + false-hit guards | |
-| M6 | Eval harness; calibrate the 85% | |
-| M7 | Dashboard | |
-| M8 | Hardening, degradation, demo | |
+| **M0** | Verify logprobs; `confidence.py`; `preflight.py` | **done** |
+| **M1** | Skeleton gateway, Ollama provider, cost accounting | **done** |
+| **M2** | Exact cache + telemetry | **done** |
+| **M3** | Pre-router | **done** |
+| **M4** | Confidence gates + escalation + mock frontier | **done** |
+| **M5** | Semantic cache + false-hit guards | **done** |
+| **M6** | Eval harness; calibrate the 85% | **done** — one gate passed, one failed; ships `raw` |
+| **M7** | Dashboard | **done** |
+| **M8** | Hardening, degradation, demo | **done** |
+| **M9** | Auth, request limits, CI | **done** |
+| **M10** | Multi-worker, breakers, container, load test | **done** |
 
 ```
-$ .venv/bin/python -m pytest -q
-37 passed in 0.04s
+$ .venv/bin/python -m pytest -q -m "not integration"
+573 passed, 8 deselected in 1.88s
 
 $ .venv/bin/python scripts/preflight.py
   ✓ python 3.14.6   ✓ venv   ✓ disk 34.1 GB free   ! swap 87%
@@ -305,14 +400,20 @@ $ .venv/bin/python scripts/preflight.py
   ✓ logprobs 1 token(s), top_logprobs=5, first='Paris' @ -0.0282
   ✓ embeddings nomic-embed-text, 768 dims
   ✓ redis reachable, no modules (brute-force cosine, as designed)
+
+$ .venv/bin/python scripts/check_docs.py
+  all 97 checks passed
 ```
+
+The 8 integration tests need a live Ollama and are deselected in CI; the unit suite is hermetic and
+is re-run behind a dead proxy to keep it that way.
 
 ## Documentation
 
 | Document | What's in it |
 |---|---|
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | How it's put together — lifecycle, components, state, failure model, seams |
-| **[docs/PLAN.md](docs/PLAN.md)** | Milestones M0–M8, config surface, Redis schema, verification commands |
+| **[docs/PLAN.md](docs/PLAN.md)** | Milestones M0–M10, config surface, Redis schema, verification commands |
 | **[docs/API.md](docs/API.md)** | The HTTP contract — endpoints, the `x_hlr` block, error shapes, cost math |
 | **[docs/DECISIONS.md](docs/DECISIONS.md)** | Why it's built this way, what was rejected, what would change each call |
 | **[docs/RESEARCH.md](docs/RESEARCH.md)** | Verified API shapes, confidence math, measured constraints, sources |

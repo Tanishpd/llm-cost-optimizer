@@ -20,6 +20,11 @@ COPY --from=build /install /usr/local
 COPY --chown=hlr:hlr app/ ./app/
 COPY --chown=hlr:hlr static/ ./static/
 COPY --chown=hlr:hlr mock_frontier/ ./mock_frontier/
+# The fitted calibrators, but not the rest of eval/ — the harness needs
+# scikit-learn and never runs in the serving image. Without this file
+# CONFIDENCE_MODE=calibrated refuses to start (by design), so it ships even
+# though the default mode ignores it.
+COPY --chown=hlr:hlr eval/calibrator.json ./eval/calibrator.json
 
 USER hlr
 
