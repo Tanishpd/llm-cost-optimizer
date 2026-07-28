@@ -190,5 +190,16 @@ multi-worker correct in principle but it's untested.
 
 ## Current state
 
-Documentation and plan complete. **No code written yet.** Start at M0 in
-[docs/PLAN.md](docs/PLAN.md) — it verifies the logprobs assumption before anything is built on it.
+**M0 complete (2026-07-28).** Logprobs verified on this machine, `app/confidence.py` shipped with 37
+passing unit tests, `scripts/preflight.py` green. All three models pulled; disk ~34 GB free.
+
+Measured, and now recorded in RESEARCH.md §3.1–3.2:
+
+- `geo_mean` per model — the 3B scores systematically higher than the 0.5B on identical prompts,
+  which is the evidence for `THRESHOLD_SMALL < THRESHOLD_LARGE` being a distribution artifact.
+- **`geo_mean` does not detect hallucination.** The 0.5B scored 0.5535 on a wholly fabricated answer
+  and the gate accepted it at the 0.55 default — a demonstrated false-cheap. Read §3.2 before
+  touching the gating logic; it constrains what any single-statistic threshold can achieve.
+
+Next: **M1** in [docs/PLAN.md](docs/PLAN.md) — skeleton gateway, `providers/ollama.py`, cost
+accounting.
