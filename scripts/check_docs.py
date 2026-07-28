@@ -109,7 +109,9 @@ def check_model_names() -> None:
 
 def check_no_stale_status() -> None:
     corpus = "\n".join(d.read_text() for d in DOCS)
-    for phrase in ("No code written yet", "implementation not started", "not wired until M4"):
+    for phrase in ("No code written yet", "implementation not started", "not wired until M4",
+                   "no code exists yet", "assumes one process", "it's untested",
+                   "single-worker assumption"):
         check(f"no stale status claim: {phrase!r}", phrase not in corpus)
 
 

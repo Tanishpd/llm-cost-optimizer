@@ -16,6 +16,7 @@ from app.cache.singleflight import SingleFlight
 from app.config import Settings
 from app.main import app
 from app.providers.base import Completion, ProviderTimeout, ProviderUnavailable
+from app.ratelimit import RedisRateLimiter
 from app.security import ApiKeyAuth, RateLimiter, RequestLimits
 from app.telemetry import Telemetry
 
@@ -121,7 +122,7 @@ def client_factory():
         # Open + unlimited by default: these tests are about the request path.
         # The auth/limit behaviour has its own tests below and in test_security.
         c.app.state.auth = auth if auth is not None else ApiKeyAuth(set())
-        c.app.state.rate_limiter = RateLimiter(limit=0)
+        c.app.state.rate_limiter = RedisRateLimiter(None, limit=0)
         c.app.state.limits = limits if limits is not None else RequestLimits()
         return c
 
@@ -1063,7 +1064,8 @@ def test_401_carries_a_www_authenticate_header(client_factory):
 
 def test_rate_limit_blocks_the_request_over_the_cap(client_factory):
     c = client_factory(StubOllama())
-    c.app.state.rate_limiter = RateLimiter(limit=2, window_s=60)
+    c.app.state.rate_limiter = RedisRateLimiter(None, limit=2, window_s=60,
+                                                fallback=RateLimiter(limit=2, window_s=60))
     assert _ask(c).status_code == 200
     assert _ask(c).status_code == 200
     r = _ask(c)
@@ -1074,7 +1076,8 @@ def test_rate_limit_blocks_the_request_over_the_cap(client_factory):
 
 def test_rate_limit_remaining_header(client_factory):
     c = client_factory(StubOllama())
-    c.app.state.rate_limiter = RateLimiter(limit=5, window_s=60)
+    c.app.state.rate_limiter = RedisRateLimiter(None, limit=5, window_s=60,
+                                                fallback=RateLimiter(limit=5, window_s=60))
     assert _ask(c).headers["X-RateLimit-Remaining"] == "4"
 
 

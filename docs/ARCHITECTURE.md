@@ -2,9 +2,10 @@
 
 How the gateway is put together and why the seams fall where they do.
 
-This describes the system as **designed**; no code exists yet. [PLAN.md](PLAN.md) sequences the build,
-[API.md](API.md) is the external contract, [DECISIONS.md](DECISIONS.md) records the rationale, and
-[RESEARCH.md](RESEARCH.md) holds the verified facts underneath it all.
+This describes the system as **built** — every component below exists and is tested.
+[PLAN.md](PLAN.md) sequences how it got here, [API.md](API.md) is the external contract,
+[DECISIONS.md](DECISIONS.md) records the rationale, and [RESEARCH.md](RESEARCH.md) holds the
+measured facts underneath it all.
 
 ---
 
@@ -143,8 +144,11 @@ replica exists because brute-force cosine over an in-process matrix is microseco
 vectors through Redis is not. It re-syncs when `hlr:sem:version` moves. If the two ever disagree,
 Redis wins.
 
-This is also the single-worker assumption. One uvicorn process, one replica. The version counter makes
-multi-worker correct in principle; it is untested, and the docs say so rather than implying otherwise.
+**Multi-worker is verified**, not merely designed for. Every worker keeps its own replica and
+re-syncs when `hlr:sem:version` moves; with 4 processes, a vector indexed by one worker was found
+by all of them (8/8 lookups). The rate limiter was the one piece that was genuinely broken across
+workers — per-process windows meant the configured limit multiplied by worker count — and now lives
+in a Redis sorted set behind a single Lua script, so the check-and-record is atomic.
 
 ## 6. Concurrency
 
@@ -219,7 +223,8 @@ Each is a place the design expects to change, with the interface already drawn:
 - **No streaming.** The gate can't decide until the whole response and its logprobs exist, so
   streaming a local answer means streaming tokens that may be discarded. `stream: true` returns 400
   rather than pretending ([D8](DECISIONS.md#d8--non-streaming-first)).
-- **No multi-worker.** One process, one warm index.
+- **Worker count is capped by RAM, not by design.** Each worker holds its own numpy replica and
+  HTTP pool; on 8 GB, 2–4 is the practical ceiling.
 - **No auth, tenancy, or rate limiting.** Single-user gateway.
 - **No local-inference cost model.** Local tiers book $0. Electricity and amortized hardware are real
   but not meaningfully attributable per request, and a made-up number would look more rigorous while
