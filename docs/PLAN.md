@@ -60,10 +60,19 @@ calibrating the gates.
 
 Each is independently runnable and demoable. Do them in order — M0 gates everything.
 
-### M0 — Preflight: prove logprobs work on *this* machine
+### M0 — Preflight: prove logprobs work on *this* machine ✅ DONE (2026-07-28)
 
-The whole confidence design rests on one assumption. Verify it before building on it. No application
-code in this milestone.
+The whole confidence design rests on one assumption. Verify it before building on it.
+
+**Outcome: logprobs confirmed.** Verbatim response in RESEARCH.md §2; measured `geo_mean`
+distributions in §3.1; measured resident RAM in §5. Shipped: `app/confidence.py` (37 unit tests),
+`scripts/preflight.py`, project scaffolding. The `self_consistency` fallback was not needed.
+
+**The probe also produced a finding that constrains everything downstream** — RESEARCH.md §3.2: raw
+`geo_mean` accepted a wholly fabricated answer at the 0.55 default, scoring it *above* an honest
+struggle on a proof. Read §3.2 before implementing M4's gates.
+
+Original instructions retained below for reproducibility.
 
 ```bash
 # free disk first — see RESEARCH.md §7 for what's reclaimable
@@ -162,8 +171,15 @@ These two raw numbers are **per-model starting points and are not comparable to 
 0.5B's `geo_mean` distribution sits lower than the 3B's, so `0.55 < 0.62` reflects the models, not a
 policy. The economic asymmetry (escalating from gate 1 is nearly free, so gate 1 should demand a
 *higher* acceptance bar) only becomes expressible in calibrated mode, where the scores are comparable
-probabilities. Record the observed `geo_mean` distribution per tier from M0 onward so M6 has a
-starting distribution rather than a guess.
+probabilities. M0 already recorded the starting distributions (RESEARCH.md §3.1): the 0.5B measured
+`geo_mean` 0.97 / 0.47 / 0.59 on easy / medium / hard, the 3B 1.00 / 0.60 / 0.67 — the 3B
+systematically higher, as the non-comparability argument requires.
+
+**Also mandatory reading before writing the gates: RESEARCH.md §3.2.** The M0 probe produced a
+measured false-cheap — the 0.5B scored a fabricated answer at 0.5535 and the 0.55 gate accepted it,
+while scoring an honest proof attempt *lower*. Consequences for this milestone: the hedge veto is
+load-bearing rather than a nicety, and no amount of tuning the single raw threshold fixes the
+underlying fluency-vs-factuality gap. Do not "fix" it by raising 0.55 — that fits one example.
 
 Demoable: an easy prompt answered by the 0.5B; a medium one falling through to the 3B; an obscure one
 reaching the frontier — each with its confidence score and reason.

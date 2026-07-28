@@ -3,11 +3,12 @@
 An API gateway that sits in front of several models of escalating cost and decides — per request —
 the cheapest one that will actually do the job.
 
-> **Status: design complete, implementation not started.**
-> This document describes the system as *specified*, not as measured. The commands below are the
-> contract the build ([docs/PLAN.md](docs/PLAN.md), M0–M8) is written against, and every number in
-> every example payload is invented to show the field layout. Nothing has been benchmarked. Real
-> figures arrive with M6/M7.
+> **Status: M0 complete — the core assumption is verified. M1–M8 not built.**
+> Ollama logprobs confirmed on real hardware, the confidence-scoring module ships with 37 passing
+> unit tests, and `scripts/preflight.py` is green. What does *not* exist yet: the gateway itself, the
+> caches, the router, the dashboard. Example payloads below still use invented values to show field
+> layout; the only measured numbers in these docs are in
+> [RESEARCH.md](docs/RESEARCH.md) §2, §3.1–3.2 and §5, and they are labelled as such.
 
 Point any OpenAI-compatible client at it. It answers from cache when it can, tries a 0.5B model
 first, steps up to a 3B when that isn't confident enough, and reaches for the expensive API only
@@ -150,6 +151,21 @@ Whether the calibration is trustworthy is itself something M6 has to demonstrate
 reliability curves, not just a fit. If it doesn't hold up, the honest outcome is staying in `raw`
 mode and saying so. Full derivation in [docs/RESEARCH.md](docs/RESEARCH.md) §3.
 
+**And M0 already found the limit of the raw metric.** Asked when the Treaty of Kadesh was signed
+(really c. 1259 BC, Egypt and the Hittites), `qwen2.5:0.5b` answered *"1956 … between Egypt and
+Israel … ended the Six-Day War ongoing since 1967"* — wrong in every particular, internally
+contradictory, and it scored `geo_mean` **0.5535**, so the 0.55 gate **accepted it**. On the same
+model a genuine struggle through an algebra proof scored *lower* (0.5468) and was correctly escalated.
+
+> Raw `geo_mean` measures fluency, not factuality — and a small model is most fluent exactly when
+> it's confabulating from a familiar-sounding template.
+
+That's a measured false-cheap at the shipped default, written up in
+[RESEARCH.md §3.2](docs/RESEARCH.md). It's the strongest argument for why calibrated mode and the
+7-feature vector aren't optional polish. It's recorded rather than papered over by nudging the
+threshold: tuning 0.55 upward to exclude one example would fit to that example and leave the actual
+problem intact.
+
 ## Constraints this was built under
 
 This machine has **8 GB of RAM**, which is a more interesting constraint than it sounds:
@@ -255,6 +271,35 @@ No code changes.
 judge model for quality scoring — roughly 3 calls per prompt across ~120 prompts. Compute the cost
 from your actual rates before running; the price constants are placeholders. Every response is cached
 under `eval/runs/` so re-fitting calibrators never re-spends.
+
+## Milestones
+
+Nine milestones, each independently runnable. M0 came first deliberately: it resolves the one
+assumption everything else rests on, before anything is built on top of it.
+
+| | Milestone | State |
+|---|---|---|
+| **M0** | Verify logprobs; `confidence.py`; `preflight.py` | **done** — 37 tests, all checks green |
+| M1 | Skeleton gateway, Ollama provider, cost accounting | next |
+| M2 | Exact cache + telemetry | |
+| M3 | Pre-router | |
+| M4 | Confidence gates + escalation + mock frontier | |
+| M5 | Semantic cache + false-hit guards | |
+| M6 | Eval harness; calibrate the 85% | |
+| M7 | Dashboard | |
+| M8 | Hardening, degradation, demo | |
+
+```
+$ .venv/bin/python -m pytest -q
+37 passed in 0.04s
+
+$ .venv/bin/python scripts/preflight.py
+  ✓ python 3.14.6   ✓ venv   ✓ disk 34.1 GB free   ! swap 87%
+  ✓ ollama v0.30.10  ✓ model:small  ✓ model:large  ✓ model:embed
+  ✓ logprobs 1 token(s), top_logprobs=5, first='Paris' @ -0.0282
+  ✓ embeddings nomic-embed-text, 768 dims
+  ✓ redis reachable, no modules (brute-force cosine, as designed)
+```
 
 ## Documentation
 
