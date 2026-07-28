@@ -108,7 +108,10 @@ def check_model_names() -> None:
 
 
 def check_no_stale_status() -> None:
-    corpus = "\n".join(d.read_text() for d in DOCS)
+    # Case-insensitive: PLAN.md carried "single-user gateway" in lowercase for
+    # two milestones after auth shipped, and a case-sensitive check walked
+    # straight past it.
+    corpus = "\n".join(d.read_text() for d in DOCS).lower()
     for phrase in ("No code written yet", "implementation not started", "not wired until M4",
                    "no code exists yet", "assumes one process", "it's untested",
                    "single-worker assumption",
@@ -130,7 +133,7 @@ def check_no_stale_status() -> None:
                    # quote when describing what D8 used to say.
                    "unsupported_streaming",
                    "No streaming."):
-        check(f"no stale status claim: {phrase!r}", phrase not in corpus)
+        check(f"no stale status claim: {phrase!r}", phrase.lower() not in corpus)
 
 
 def check_streaming_is_not_oversold() -> None:
