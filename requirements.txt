@@ -1,0 +1,10 @@
+# Runtime dependencies. numpy-only for math — no torch, no transformers,
+# no sentence-transformers (see docs/DECISIONS.md D6: Ollama serves embeddings
+# over HTTP, so a second inference runtime would just compete for scarce RAM).
+fastapi>=0.115
+uvicorn[standard]>=0.34
+httpx>=0.28
+pydantic>=2.10
+pydantic-settings>=2.7
+redis>=5.2
+numpy>=2.1

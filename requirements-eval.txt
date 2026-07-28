@@ -1,0 +1,4 @@
+# Eval-only extras (M6). Kept out of requirements.txt because scikit-learn
+# pulls scipy (~90 MB installed) and the gateway never needs it at runtime.
+-r requirements.txt
+scikit-learn>=1.6
