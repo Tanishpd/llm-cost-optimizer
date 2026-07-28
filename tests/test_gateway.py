@@ -15,6 +15,7 @@ from app.cache.keys import build_key
 from app.config import Settings
 from app.main import app
 from app.providers.base import Completion, ProviderTimeout, ProviderUnavailable
+from app.providers.frontier import FrontierProvider
 from app.telemetry import Telemetry
 
 REAL_LOGPROBS = [
@@ -56,6 +57,28 @@ class StubOllama:
         return 0.0
 
 
+class StubFrontier:
+    """Stand-in for the expensive tier."""
+
+    name = "frontier"
+
+    def __init__(self, *, error=None, healthy=True, content="[frontier answer]"):
+        self._error, self._healthy, self._content = error, healthy, content
+        self.calls: list[dict] = []
+
+    async def chat(self, **kwargs):
+        self.calls.append(kwargs)
+        if self._error:
+            raise self._error
+        return Completion(
+            content=self._content, model=kwargs["model"], tokens_in=41, tokens_out=91,
+            logprobs=[], latency_ms=1800.0,
+        )
+
+    async def health(self):
+        return (True, "reachable") if self._healthy else (False, "unreachable")
+
+
 @pytest.fixture
 def client_factory():
     """Build a TestClient with stubbed dependencies, bypassing the real lifespan.
@@ -70,6 +93,7 @@ def client_factory():
         settings: Settings | None = None,
         cache: ExactCache | None = None,
         telemetry: Telemetry | None = None,
+        frontier: StubFrontier | None = None,
     ) -> TestClient:
         c = TestClient(app)
         c.app.state.settings = settings or Settings(_env_file=None)
@@ -80,6 +104,7 @@ def client_factory():
         # Defaults to no-op telemetry — most gateway tests are about the
         # request path, and telemetry must never affect it.
         c.app.state.telemetry = telemetry if telemetry is not None else Telemetry(None)
+        c.app.state.frontier = frontier if frontier is not None else StubFrontier()
         return c
 
     return _make
@@ -215,13 +240,18 @@ def test_reserved_models_select_the_tier(client_factory, model, expected):
     assert stub.calls[0]["model"] == expected
 
 
-def test_frontier_tier_says_it_is_not_built_yet(client_factory):
-    """Honest 501 rather than pretending or 500ing."""
-    c = client_factory(StubOllama())
-    r = c.post("/v1/chat/completions", json={"model": "gateway:frontier", "messages": [{"role": "user", "content": "q"}]})
-    assert r.status_code == 501
-    assert r.json()["error"]["code"] == "tier_not_implemented"
-    assert "M4" in r.json()["error"]["message"]
+def test_forced_frontier_tier_serves(client_factory):
+    """The frontier is real from M4 on."""
+    stub_f = StubFrontier()
+    c = client_factory(StubOllama(), frontier=stub_f)
+    r = c.post("/v1/chat/completions", json={"model": "gateway:frontier",
+                                             "messages": [{"role": "user", "content": "q"}]})
+    assert r.status_code == 200
+    hlr = r.json()["x_hlr"]
+    assert hlr["tier"] == "frontier"
+    assert hlr["cost_usd"] > 0  # the only tier that bills
+    assert hlr["cost_saved_usd"] == 0.0
+    assert len(stub_f.calls) == 1
 
 
 # --------------------------------------------------------------------------
@@ -248,18 +278,56 @@ def test_error_responses_carry_x_hlr(client_factory):
     assert body["x_hlr"]["tier"] is None
 
 
-def test_ollama_down_returns_503_naming_the_fix(client_factory):
-    c = client_factory(StubOllama(error=ProviderUnavailable("unreachable", fix="Run: ollama serve &")))
+def test_ollama_down_escalates_to_frontier_and_says_so(client_factory):
+    """Invariant 4: "Ollama down -> escalate everything and say so". Both local
+    tiers are skipped, the frontier serves, and degraded names what failed."""
+    c = client_factory(
+        StubOllama(error=ProviderUnavailable("unreachable", fix="Run: ollama serve &")),
+        frontier=StubFrontier(),
+    )
+    r = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}]})
+    assert r.status_code == 200
+    hlr = r.json()["x_hlr"]
+    assert hlr["tier"] == "frontier"
+    assert "local_small_unavailable" in hlr["degraded"]
+    assert hlr["path"][-1] == "frontier"
+
+
+def test_everything_down_is_the_only_real_failure(client_factory):
+    """A 503 requires *no* tier to be reachable."""
+    c = client_factory(
+        StubOllama(error=ProviderUnavailable("ollama down", fix="Run: ollama serve &")),
+        frontier=StubFrontier(error=ProviderUnavailable("frontier down")),
+    )
     r = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}]})
     assert r.status_code == 503
     assert r.json()["error"]["code"] == "all_tiers_down"
-    assert "ollama serve" in r.json()["error"]["message"]
-    assert "ollama_unavailable" in r.json()["x_hlr"]["degraded"]
+    assert "x_hlr" in r.json()
 
 
-def test_timeout_returns_504_not_503(client_factory):
+def test_frontier_down_returns_the_best_local_answer(client_factory):
+    """Escalation impossible: return the below-threshold answer and admit it.
+    A weak answer plus an honest reason beats no answer."""
+    weak = Completion(content="unsure", model="qwen2.5:3b", tokens_in=10, tokens_out=5,
+                      logprobs=[{"token": "u", "logprob": -2.5}], latency_ms=100.0)
+    c = client_factory(
+        StubOllama(completion=weak),
+        frontier=StubFrontier(error=ProviderUnavailable("frontier down")),
+    )
+    r = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}]})
+    assert r.status_code == 200
+    hlr = r.json()["x_hlr"]
+    assert hlr["tier"] in ("local_small", "local_large")
+    assert "escalation_exhausted" in hlr["degraded"]
+    assert "best available" in hlr["reason"]
+
+
+def test_timeout_returns_504_when_nothing_else_can_serve(client_factory):
     """Distinct from unreachable: the backend accepted but didn't answer."""
-    c = client_factory(StubOllama(error=ProviderTimeout("too slow")))
+    c = client_factory(
+        StubOllama(error=ProviderTimeout("too slow")),
+        frontier=StubFrontier(error=ProviderTimeout("also slow")),
+    )
     r = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "q"}]})
     assert r.status_code == 504
     assert r.json()["error"]["code"] == "upstream_timeout"
@@ -311,7 +379,7 @@ def test_healthz_reports_active_thresholds(client_factory):
 
 def test_root_describes_current_milestone(client_factory):
     c = client_factory(StubOllama())
-    assert "M3" in c.get("/").json()["milestone"]
+    assert "M4" in c.get("/").json()["milestone"]
 
 
 # --------------------------------------------------------------------------
@@ -616,16 +684,21 @@ def test_forced_tier_overrides_router_and_says_so(client_factory):
     assert "local_small" in router["reason"]  # what the router would have chosen
 
 
-def test_frontier_entry_returns_501_naming_the_router_reason(client_factory):
-    """Until M4: honest refusal, and it explains why it was headed there."""
-    c = client_factory(StubOllama())
+def test_router_frontier_entry_skips_both_local_tiers(client_factory):
+    """A multi-signal hard prompt goes straight to the frontier — no wasted
+    local calls."""
+    stub_o, stub_f = StubOllama(), StubFrontier()
+    c = client_factory(stub_o, frontier=stub_f)
     r = _ask(c, "Prove that every finite integral domain is a field. Walk me through "
                 "step by step, explain why each lemma holds, discuss trade-offs of the "
                 "alternative proofs. What if the ring were infinite? How would you "
                 "generalize?\n```\nR = Z/pZ\n```")
-    assert r.status_code == 501
-    assert "frontier" in r.json()["error"]["message"]
-    assert "hardness signals" in r.json()["error"]["message"]
+    assert r.status_code == 200
+    hlr = r.json()["x_hlr"]
+    assert hlr["tier"] == "frontier"
+    assert hlr["path"] == ["frontier"]
+    assert stub_o.calls == [], "a local model was called despite frontier entry"
+    assert hlr["gates"] == []  # nothing to gate on the last tier
 
 
 # --------------------------------------------------------------------------
