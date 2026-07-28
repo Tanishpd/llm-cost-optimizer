@@ -458,5 +458,7 @@ python3 scripts/demo.py
   is what would generate the training labels anyway. Measure, then learn.
 - **A third local tier / 7B model.** RAM-blocked, not a design choice. Revisit on different hardware.
 - **Multi-tenancy, auth, rate limiting.** Out of scope for a single-user gateway.
-- **Multi-worker uvicorn.** The warm numpy index assumes one process. The version counter makes
-  multi-worker correct in principle, but it's untested until there's a reason to run it.
+- ~~**Multi-worker uvicorn.**~~ **Done in M10** and verified with 4 real worker processes: the
+  rate limiter moved to a Redis sorted set (it was the one genuinely broken piece — per-process
+  windows meant a 60/min cap silently became 60N), and the semantic replica's version counter was
+  confirmed to resync across processes rather than merely being correct on paper.

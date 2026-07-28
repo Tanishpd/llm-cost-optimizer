@@ -28,7 +28,10 @@ claim is treated as empirical — `eval/` measures it rather than assuming it.
 Verified 2026-07-27. These are the reason the architecture looks the way it does. Do not design
 around imagined constraints; design around these.
 
-- **8 GB RAM. This is the binding constraint, and it cannot be relieved.** Local models are capped at
+- **8 GB RAM. This is the binding constraint, and it cannot be relieved.** It also caps worker
+  count: each worker holds its own numpy replica and HTTP pool, so 2–4 workers is the practical
+  ceiling here, not the 1 the docs previously assumed.
+- **8 GB RAM (cont.)** Local models are capped at
   3B–4B. `mistral:7b` (~4.8 GB resident, estimated) will thrash — excluded on RAM, not disk. Keep
   `OLLAMA_MAX_LOADED_MODELS=2`; three resident models plus a browser will swap.
 - **Disk: target ~20 GB free. Measured 7.9 GB (97% full) as of 2026-07-27**, up from 3.2 GB — being
@@ -204,8 +207,20 @@ uvicorn app.main:app --port 8000 --reload
 uvicorn mock_frontier.main:app --port 8001    # separate terminal
 ```
 
-Single uvicorn worker. The warm numpy index assumes one process — the version counter makes
-multi-worker correct in principle but it's untested.
+**Multi-worker is supported and verified** (M10). All shared state lives in Redis:
+
+| State | Mechanism | Verified with 4 workers |
+|---|---|---|
+| Rate limit window | Redis sorted set, one Lua script | 20 requests, cap 10 → exactly 10 allowed |
+| Semantic index | numpy replica + `hlr:sem:version` counter | seeded on one worker, 8/8 hits across all |
+| Single flight | `SET NX PX` lease | 8 concurrent identical → 1 model call |
+| Cache, telemetry | Redis | counters agree across workers |
+
+The numpy matrix is still per-process, but it is a *replica* — the version
+counter drives a resync, which is what makes it correct rather than merely
+lucky. If Redis is unreachable the rate limiter falls back to per-process
+state and says so in the log; the limit then multiplies by worker count,
+which is worse than shared but far better than none.
 
 ## Current state
 

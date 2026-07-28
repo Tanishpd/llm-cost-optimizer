@@ -37,6 +37,7 @@ from app.dashboard import render as render_dashboard
 from app.providers.base import ProviderTimeout, ProviderUnavailable
 from app.providers.frontier import FrontierProvider
 from app.providers.ollama import OllamaProvider
+from app.ratelimit import RedisRateLimiter
 from app.router.policy import decide
 from app.schemas import (
     CacheRecord,
@@ -99,7 +100,14 @@ async def lifespan(app: FastAPI):
     app.state.telemetry = Telemetry(redis)
     app.state.singleflight = SingleFlight(redis)
     app.state.auth = ApiKeyAuth(settings.api_key_set, require_auth=settings.require_auth)
-    app.state.rate_limiter = RateLimiter(limit=settings.rate_limit_per_minute)
+    # Redis-backed so every worker shares one window. Falls back to
+    # per-process state if Redis is unreachable — a limit that multiplies by
+    # worker count still beats no limit at all.
+    app.state.rate_limiter = RedisRateLimiter(
+        redis,
+        limit=settings.rate_limit_per_minute,
+        fallback=RateLimiter(limit=settings.rate_limit_per_minute),
+    )
     app.state.limits = RequestLimits(
         max_prompt_chars=settings.max_prompt_chars,
         max_messages=settings.max_messages,
@@ -251,8 +259,8 @@ async def enforce_access(request: Request, call_next):
     if principal == "anonymous":
         principal = f"ip:{request.client.host if request.client else 'unknown'}"
 
-    limiter: RateLimiter = request.app.state.rate_limiter
-    allowed, remaining, retry_after = limiter.check(principal)
+    limiter: RedisRateLimiter = request.app.state.rate_limiter
+    allowed, remaining, retry_after = await limiter.check(principal)
     if not allowed:
         return JSONResponse(
             status_code=429,
