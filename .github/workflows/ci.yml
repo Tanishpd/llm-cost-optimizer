@@ -36,6 +36,19 @@ jobs:
       # Integration tests need a live Ollama with ~2.6 GB of models and are
       # deselected here on purpose. The unit suite runs with no network at all
       # — that constraint is what keeps it usable in CI.
+      # Belt and braces with tests/test_dashboard.py, which skips if node is
+      # missing. A skipped syntax check reads exactly like a passing one, and
+      # this file is where a SyntaxError once blanked the whole page while 441
+      # tests stayed green.
+      - name: Dashboard JavaScript parses
+        run: |
+          python - <<'PY' > /tmp/dashboard.js
+          import re, pathlib
+          html = pathlib.Path("static/dashboard.html").read_text()
+          print(re.findall(r"<script>(.*?)</script>", html, re.S)[0])
+          PY
+          node --check /tmp/dashboard.js
+
       - name: Unit tests
         run: pytest -m "not integration" -q
 
