@@ -605,16 +605,21 @@ python3 scripts/demo.py
 
 ## Deliberately deferred
 
-- **Streaming (SSE).** Confidence gating needs the whole response before deciding, so streaming a
-  local answer means streaming tokens you may then discard. Resolvable (buffer, stream only after the
-  decision) but it complicates M4 for no demo value. Non-streaming is the honest first build.
+- ~~**Streaming (SSE).**~~ **Done in M11**, by the route this entry sketched: buffer the whole
+  cascade, then re-emit the finished answer as frames. It does not lower time-to-first-token and the
+  docs say so; the win is client compatibility, plus two things a live stream cannot do — no token is
+  ever retracted, and a failure stays an ordinary HTTP error instead of a truncated stream.
 - **Redis 8 Vector Sets.** Available via `brew upgrade redis` (RESEARCH.md §4) but unnecessary below
   ~100k entries and risky to swap under a running server. `cache/semantic.py` is written behind an
   interface so it's a drop-in later.
 - **A learned routing classifier.** The Protocol exists; the heuristic ships first because M6's eval
   is what would generate the training labels anyway. Measure, then learn.
 - **A third local tier / 7B model.** RAM-blocked, not a design choice. Revisit on different hardware.
-- **Multi-tenancy, auth, rate limiting.** Out of scope for a single-user gateway.
+- ~~**Auth and rate limiting.**~~ **Done in M9/M10** — per-key auth, request bounds, and a
+  Redis-backed sliding window shared across workers.
+- **Multi-tenancy.** Still deferred, and now the more interesting gap: a key is a credential, not an
+  account, so every key draws on the same frontier spend. The seam is `ApiKeyAuth.principal_for`,
+  which already resolves a stable per-key digest.
 - ~~**Multi-worker uvicorn.**~~ **Done in M10** and verified with 4 real worker processes: the
   rate limiter moved to a Redis sorted set (it was the one genuinely broken piece — per-process
   windows meant a 60/min cap silently became 60N), and the semantic replica's version counter was
