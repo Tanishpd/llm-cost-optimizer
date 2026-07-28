@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.cache.exact import CachedAnswer, ExactCache
+from app.cache.semantic import SemanticCache
 from app.cache.keys import build_key
 from app.config import Settings
 from app.main import app
@@ -94,6 +95,7 @@ def client_factory():
         cache: ExactCache | None = None,
         telemetry: Telemetry | None = None,
         frontier: StubFrontier | None = None,
+        semantic: SemanticCache | None = None,
     ) -> TestClient:
         c = TestClient(app)
         c.app.state.settings = settings or Settings(_env_file=None)
@@ -105,6 +107,12 @@ def client_factory():
         # request path, and telemetry must never affect it.
         c.app.state.telemetry = telemetry if telemetry is not None else Telemetry(None)
         c.app.state.frontier = frontier if frontier is not None else StubFrontier()
+        # Semantic tier off by default: most gateway tests are about the
+        # request path, and an embedder call would only add noise. The
+        # semantic-specific tests below enable it explicitly.
+        c.app.state.semantic_cache = (
+            semantic if semantic is not None else SemanticCache(None, enabled=False)
+        )
         return c
 
     return _make
@@ -379,7 +387,7 @@ def test_healthz_reports_active_thresholds(client_factory):
 
 def test_root_describes_current_milestone(client_factory):
     c = client_factory(StubOllama())
-    assert "M4" in c.get("/").json()["milestone"]
+    assert "M5" in c.get("/").json()["milestone"]
 
 
 # --------------------------------------------------------------------------
@@ -504,7 +512,7 @@ def test_flush_endpoint_clears_the_cache(client_factory, live_cache):
     _ask(c)
     assert _ask(c).json()["x_hlr"]["tier"] == "cache_exact"
 
-    assert c.delete("/cache").json()["flushed"] == 1
+    assert c.delete("/cache").json()["flushed"]["cache_exact"] == 1
     assert _ask(c).json()["x_hlr"]["tier"] == "local_small"
     assert len(stub.calls) == 2
 
@@ -751,3 +759,156 @@ def test_route_endpoint_agrees_with_the_chat_path(client_factory):
     served = _ask(c, prompt).json()["x_hlr"]
     assert routed["entry_tier"] == served["tier"] == served["router"]["entry_tier"]
     assert routed["score"] == pytest.approx(served["router"]["score"])
+
+
+# --------------------------------------------------------------------------
+# M5: T1 semantic cache through the gateway
+# --------------------------------------------------------------------------
+
+
+class StubEmbeddingOllama(StubOllama):
+    """StubOllama plus deterministic embeddings keyed by prompt substring."""
+
+    def __init__(self, vectors: dict[str, list[float]] | None = None, **kw):
+        super().__init__(**kw)
+        self._vectors = vectors or {}
+        self.embed_calls: list[str] = []
+
+    async def embed(self, *, model, texts):
+        text = texts if isinstance(texts, str) else texts[0]
+        self.embed_calls.append(text)
+        for needle, vector in self._vectors.items():
+            if needle.lower() in text.lower():
+                return [vector]
+        return [[0.0, 1.0, 0.0, 0.0]]
+
+
+@pytest.fixture
+def live_semantic():
+    from tests.test_semantic_cache import FakeRedis as SemFakeRedis
+
+    return SemanticCache(SemFakeRedis(), threshold=0.95, max_chars=500, max_entries=100)
+
+
+FRANCE_VEC = [1.0, 0.0, 0.0, 0.0]
+
+
+def test_reworded_question_hits_the_semantic_tier(client_factory, live_cache, live_semantic):
+    """The M5 demo: a different wording of a question already asked."""
+    stub = StubEmbeddingOllama({"france": FRANCE_VEC, "capital": FRANCE_VEC})
+    c = client_factory(stub, cache=live_cache, semantic=live_semantic)
+
+    first = _ask(c, "What is the capital of France?").json()
+    assert first["x_hlr"]["tier"] == "local_small"
+
+    second = _ask(c, "What's the capital city of France?").json()
+    assert second["x_hlr"]["tier"] == "cache_semantic"
+    assert second["x_hlr"]["cache"]["semantic_hit"] is True
+    assert second["x_hlr"]["cache"]["similarity"] == pytest.approx(1.0)
+    assert len(stub.calls) == 1, "the model ran twice — the semantic tier did not serve"
+
+
+def test_semantic_hit_reports_the_matched_prompt(client_factory, live_cache, live_semantic):
+    stub = StubEmbeddingOllama({"capital": FRANCE_VEC})
+    c = client_factory(stub, cache=live_cache, semantic=live_semantic)
+    _ask(c, "What is the capital of France?")
+    reason = _ask(c, "What's the capital city of France?").json()["x_hlr"]["reason"]
+    assert "semantic cache hit" in reason
+    assert "cosine" in reason
+
+
+def test_guard_rejection_is_reported_not_silent(client_factory, live_cache, live_semantic):
+    """Australia vs Austria at cosine 1.0 — the guard fires and says which."""
+    stub = StubEmbeddingOllama({"capital": FRANCE_VEC})
+    c = client_factory(stub, cache=live_cache, semantic=live_semantic)
+    _ask(c, "What is the capital of Austria?")
+    second = _ask(c, "What is the capital of Australia?").json()["x_hlr"]
+    assert second["tier"] != "cache_semantic"
+    assert second["cache"]["guard_rejected"] == "entity_mismatch"
+    assert second["cache"]["similarity"] == pytest.approx(1.0)
+
+
+def test_negation_guard_through_the_gateway(client_factory, live_cache, live_semantic):
+    """The guard the measurement showed is load-bearing (RESEARCH.md §3.3)."""
+    stub = StubEmbeddingOllama({"api": FRANCE_VEC})
+    c = client_factory(stub, cache=live_cache, semantic=live_semantic)
+    _ask(c, "Is this API safe to use?")
+    second = _ask(c, "Is this API not safe to use?").json()["x_hlr"]
+    assert second["tier"] != "cache_semantic"
+    assert second["cache"]["guard_rejected"] == "negation_mismatch"
+
+
+def test_multi_turn_never_reaches_the_embedder(client_factory, live_cache, live_semantic):
+    """Ineligible prompts short-circuit before the embedding call — an
+    ineligible request should cost nothing."""
+    stub = StubEmbeddingOllama({"capital": FRANCE_VEC})
+    c = client_factory(stub, cache=live_cache, semantic=live_semantic)
+    c.post("/v1/chat/completions", json={"messages": [
+        {"role": "user", "content": "What is the capital of France?"},
+        {"role": "assistant", "content": "Paris"},
+        {"role": "user", "content": "What about Germany?"},
+    ]})
+    assert stub.embed_calls == []
+
+
+def test_embedder_down_degrades_to_local(client_factory, live_cache, live_semantic):
+    """Invariant 4: the embedder failing disables one tier, nothing more."""
+
+    class NoEmbed(StubOllama):
+        async def embed(self, **kw):
+            raise ProviderUnavailable("embedder gone", fix="ollama pull nomic-embed-text")
+
+    c = client_factory(NoEmbed(), cache=live_cache, semantic=live_semantic)
+    r = _ask(c, "What is the capital of France?")
+    assert r.status_code == 200
+    assert "embedder_unavailable" in r.json()["x_hlr"]["degraded"]
+
+
+def test_semantic_latency_is_recorded(client_factory, live_cache, live_semantic):
+    stub = StubEmbeddingOllama({"capital": FRANCE_VEC})
+    c = client_factory(stub, cache=live_cache, semantic=live_semantic)
+    _ask(c, "What is the capital of France?")
+    latency = _ask(c, "What's the capital city of France?").json()["x_hlr"]["latency_ms"]
+    assert "cache_semantic" in latency
+
+
+def test_exact_hit_short_circuits_before_embedding(client_factory, live_cache, live_semantic):
+    """T0 first: an exact hit must not pay for an embedding call."""
+    stub = StubEmbeddingOllama({"capital": FRANCE_VEC})
+    c = client_factory(stub, cache=live_cache, semantic=live_semantic)
+    _ask(c, "What is the capital of France?")
+    before = len(stub.embed_calls)
+    r = _ask(c, "What is the capital of France?")  # identical
+    assert r.json()["x_hlr"]["tier"] == "cache_exact"
+    assert len(stub.embed_calls) == before
+
+
+def test_semantic_hit_credits_the_same_savings(client_factory, live_cache, live_semantic):
+    stub = StubEmbeddingOllama({"capital": FRANCE_VEC})
+    c = client_factory(stub, cache=live_cache, semantic=live_semantic)
+    first = _ask(c, "What is the capital of France?").json()["x_hlr"]
+    second = _ask(c, "What's the capital city of France?").json()["x_hlr"]
+    assert second["cost_usd"] == 0.0
+    assert second["cost_saved_usd"] == first["cost_saved_usd"]
+
+
+def test_flush_clears_both_tiers(client_factory, live_cache, live_semantic):
+    stub = StubEmbeddingOllama({"capital": FRANCE_VEC})
+    c = client_factory(stub, cache=live_cache, semantic=live_semantic)
+    _ask(c, "What is the capital of France?")
+    flushed = c.delete("/cache").json()["flushed"]
+    assert flushed["cache_exact"] >= 1
+    assert flushed["cache_semantic"] >= 1
+
+
+def test_guard_rejections_reach_metrics(client_factory, live_cache, live_semantic, live_telemetry):
+    """A guard firing means the *model* served, so the rejection is recorded on
+    that path. Without it, over-conservative guards would be invisible in
+    /metrics — the one place they are meant to be measurable."""
+    stub = StubEmbeddingOllama({"capital": FRANCE_VEC})
+    c = client_factory(stub, cache=live_cache, semantic=live_semantic, telemetry=live_telemetry)
+    _ask(c, "What is the capital of Austria?")
+    _ask(c, "What is the capital of Australia?")  # cosine 1.0, entity guard fires
+
+    rejections = c.get("/metrics").json()["cache"]["guard_rejections"]
+    assert rejections.get("entity_mismatch") == 1
