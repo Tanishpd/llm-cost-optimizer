@@ -98,6 +98,22 @@ def test_prices_are_decimal_not_float():
     assert isinstance(s.frontier_price_out, Decimal)
 
 
+def test_frontier_api_key_never_renders_in_a_repr():
+    """The one setting that is a credential must not leak through a repr.
+
+    Nothing currently logs a Settings object, but exception handlers and
+    debuggers print whatever they are handed. SecretStr makes that safe by
+    construction instead of by everyone remembering.
+    """
+    s = Settings(_env_file=None, frontier_api_key="sk-super-secret-123")
+
+    assert "sk-super-secret-123" not in repr(s)
+    assert "sk-super-secret-123" not in str(s)
+    assert "sk-super-secret-123" not in str(s.model_dump())
+    # ...and is still readable when actually needed.
+    assert s.frontier_api_key.get_secret_value() == "sk-super-secret-123"
+
+
 # --------------------------------------------------------------------------
 # request schema
 # --------------------------------------------------------------------------

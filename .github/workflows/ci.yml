@@ -79,3 +79,46 @@ jobs:
       # that caught it by hand now run automatically.
       - name: Cross-document consistency
         run: python scripts/check_docs.py
+
+  # The dev machine has no Docker daemon, so this is the only place the image
+  # is ever built. An unbuilt Dockerfile in a repo is a claim, not a deliverable.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: docker build -t hlr-gateway:ci .
+
+      - name: Boot with no dependencies at all
+        # No Redis, no Ollama. The gateway must still start and report live —
+        # that is invariant 4 (degrade, don't fail) at the process level. If it
+        # crash-loops without its dependencies, this catches it here rather
+        # than in someone's cluster.
+        run: |
+          docker run -d --name gw -p 8000:8000 hlr-gateway:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/livez; then ok=1; break; fi
+            sleep 1
+          done
+          echo
+          docker logs gw
+          test "${ok:-0}" = 1 || { echo "gateway never became live"; exit 1; }
+
+      - name: Readiness reports NOT ready without Ollama
+        # The inverse check, and the more important one: /readyz must be honest.
+        # A readiness probe that returns 200 with no models behind it would send
+        # a broken instance live traffic.
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/readyz)
+          echo "/readyz -> $code"
+          test "$code" = 503 || { echo "expected 503 with no Ollama, got $code"; exit 1; }
+
+      - name: Image runs as non-root
+        run: |
+          uid=$(docker exec gw id -u)
+          test "$uid" = 10001 || { echo "expected uid 10001, got $uid"; exit 1; }
+
+      - name: Stop
+        if: always()
+        run: docker rm -f gw || true

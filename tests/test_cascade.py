@@ -12,6 +12,7 @@ import math
 import pytest
 
 from app.cascade import CascadeResult, build_tiers, entry_index, execute
+from app.confidence import LogisticCalibrator
 from app.providers.base import Completion, ProviderTimeout, ProviderUnavailable
 
 TIERS = build_tiers(
@@ -306,3 +307,88 @@ async def test_each_gate_uses_its_own_threshold():
 def test_result_served_property():
     assert CascadeResult(completion=None, tier=None).served is False
     assert CascadeResult(completion=completion(0.9), tier="local_small").served is True
+
+
+# --------------------------------------------------------------------------
+# calibrated mode
+#
+# `CONFIDENCE_MODE=calibrated` was a settable knob with nothing behind it for
+# a while: main.py never loaded eval/calibrator.json, so the calibrated path
+# silently fell back to raw thresholds while x_hlr kept reporting
+# "calibrated". These pin the wiring end to end.
+# --------------------------------------------------------------------------
+
+
+CALIBRATED_TIERS = build_tiers(
+    small_model="qwen2.5:0.5b",
+    large_model="qwen2.5:3b",
+    frontier_model="gpt-4o-mock",
+    # In calibrated mode gate 1's bar is HIGHER than gate 2's: escalating from
+    # it is nearly free, so it should escalate readily (DECISIONS.md D5).
+    threshold_small=0.92,
+    threshold_large=0.85,
+)
+
+
+def _constant_calibrator(p: float) -> LogisticCalibrator:
+    """A calibrator that returns `p` regardless of the feature vector."""
+    z = math.log(p / (1.0 - p))
+    return LogisticCalibrator(weights=[0.0] * 7, bias=z)
+
+
+async def test_calibrated_mode_uses_the_calibrator_not_the_raw_score():
+    """A raw score that would sail through, rejected by the calibrator."""
+    runners, calls = runners_returning(
+        ("local_small", completion(0.99)), ("local_large", completion(0.99)),
+        ("frontier", frontier_completion()),
+    )
+    r = await execute(
+        CALIBRATED_TIERS, start=0, messages=MESSAGES, runners=runners,
+        confidence_mode="calibrated",
+        calibrators={"small": _constant_calibrator(0.10),
+                     "large": _constant_calibrator(0.10)},
+    )
+    # geo_mean 0.99 would clear any raw threshold; P(good) 0.10 clears neither.
+    assert r.tier == "frontier"
+    assert calls == ["local_small", "local_large", "frontier"]
+    assert [g.confidence for g in r.gates] == [pytest.approx(0.10), pytest.approx(0.10)]
+
+
+async def test_calibrated_mode_accepts_what_raw_would_escalate():
+    """And the reverse — the calibrator can rescue a low raw score."""
+    runners, calls = runners_returning(("local_small", completion(0.30)))
+    r = await execute(
+        CALIBRATED_TIERS, start=0, messages=MESSAGES, runners=runners,
+        confidence_mode="calibrated",
+        calibrators={"small": _constant_calibrator(0.97)},
+    )
+    assert r.tier == "local_small"
+    assert calls == ["local_small"]
+
+
+async def test_each_gate_gets_its_own_calibrator():
+    """Gate 1 and gate 2 must never share fitted parameters (D5)."""
+    runners, calls = runners_returning(
+        ("local_small", completion(0.99)), ("local_large", completion(0.99)),
+    )
+    r = await execute(
+        CALIBRATED_TIERS, start=0, messages=MESSAGES, runners=runners,
+        confidence_mode="calibrated",
+        calibrators={"small": _constant_calibrator(0.50),   # below 0.92 -> escalate
+                     "large": _constant_calibrator(0.90)},  # above 0.85 -> accept
+    )
+    assert r.tier == "local_large"
+    assert calls == ["local_small", "local_large"]
+
+
+async def test_calibrated_mode_without_calibrators_falls_back_to_raw():
+    """Serving must not break on a missing fit — main.py refuses to *start*
+    in this configuration, so reaching here means it was never claimed."""
+    runners, _ = runners_returning(("local_small", completion(0.99)))
+    r = await execute(
+        CALIBRATED_TIERS, start=0, messages=MESSAGES, runners=runners,
+        confidence_mode="calibrated", calibrators={},
+    )
+    # 0.99 raw against the 0.92 bar.
+    assert r.tier == "local_small"
+    assert r.gates[0].confidence == pytest.approx(0.99, abs=1e-6)

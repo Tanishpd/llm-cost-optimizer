@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -31,6 +33,7 @@ from app.cache.keys import build_key
 from app.cache.semantic import SemanticCache, SemanticHit
 from app.cache.singleflight import SingleFlight
 from app.cascade import build_tiers, entry_index, execute
+from app.confidence import calibrators_from_dict
 from app.config import Settings, get_settings
 from app.costs import TokenUsage, compute_cost, micro_to_usd
 from app.dashboard import render as render_dashboard
@@ -139,6 +142,25 @@ async def lifespan(app: FastAPI):
             "AUTH DISABLED: no GATEWAY_API_KEYS set. Anyone who can reach this port can "
             "spend the frontier budget. Only bind to loopback in this mode."
         )
+
+    # Calibrators: read once, here, so the request path stays I/O-free and a
+    # malformed fit fails at startup rather than on the first gate. Absent is
+    # fine in `raw` mode — a fresh checkout has never run eval. Absent in
+    # `calibrated` mode is the same class of problem as REQUIRE_AUTH with no
+    # keys: the gateway would fall back to raw thresholds while `x_hlr` kept
+    # reporting `calibrated`, so it refuses to start instead.
+    app.state.calibrators = {}
+    cal_path = Path(settings.calibrator_path)
+    if cal_path.exists():
+        app.state.calibrators = calibrators_from_dict(json.loads(cal_path.read_text()))
+        logger.info("calibrators: %s -> gate(s) %s",
+            cal_path, sorted(app.state.calibrators) or "none")
+    if settings.confidence_mode == "calibrated" and not app.state.calibrators:
+        raise RuntimeError(
+            f"CONFIDENCE_MODE=calibrated but no calibrators at {cal_path} — refusing to "
+            "start and report a confidence the gates are not actually using. "
+            "Run eval/run_eval.py, or set CONFIDENCE_MODE=raw."
+        )
     app.state.semantic_cache = SemanticCache(
         redis,
         threshold=settings.semantic_threshold,
@@ -149,7 +171,7 @@ async def lifespan(app: FastAPI):
     app.state.frontier = FrontierProvider(
         client,
         base_url=settings.frontier_base_url,
-        api_key=settings.frontier_api_key,
+        api_key=settings.frontier_api_key.get_secret_value(),
         timeout_s=settings.frontier_timeout_s,
     )
 
@@ -576,6 +598,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
             "frontier": run_frontier,
         },
         confidence_mode=settings.confidence_mode,
+        calibrators=request.app.state.calibrators,
         breakers=request.app.state.breakers,
         retry_policy=request.app.state.retry_policy,
     )

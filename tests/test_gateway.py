@@ -101,6 +101,7 @@ def client_factory():
         auth: ApiKeyAuth | None = None,
         limits: RequestLimits | None = None,
         breakers: BreakerRegistry | None = None,
+        calibrators: dict | None = None,
     ) -> TestClient:
         c = TestClient(app)
         c.app.state.settings = settings or Settings(_env_file=None)
@@ -130,6 +131,8 @@ def client_factory():
         # deliberately fails a tier repeatedly does not trip one mid-suite.
         c.app.state.breakers = breakers or BreakerRegistry(failure_threshold=10**6)
         c.app.state.retry_policy = RetryPolicy(attempts=1)
+        # Empty by default: the shipped mode is `raw`, which ignores these.
+        c.app.state.calibrators = calibrators if calibrators is not None else {}
         return c
 
     return _make
@@ -1129,3 +1132,73 @@ def test_error_responses_do_not_leak_the_key(client_factory):
     c = client_factory(StubOllama(), auth=ApiKeyAuth({"sk-supersecret"}))
     body = c.get("/metrics", headers={"X-API-Key": "wrong"}).text
     assert "sk-supersecret" not in body
+
+
+# --------------------------------------------------------------------------
+# startup guards
+#
+# Both of these are the same principle: a configuration that would make the
+# gateway *report* one thing while *doing* another must not start. A crash
+# names the problem; silently serving open, or silently serving raw
+# thresholds under a "calibrated" label, does not.
+# --------------------------------------------------------------------------
+
+
+def test_calibrated_mode_without_a_calibrator_file_refuses_to_start(monkeypatch, tmp_path):
+    from app.config import get_settings
+
+    missing = tmp_path / "nope.json"
+    monkeypatch.setenv("CONFIDENCE_MODE", "calibrated")
+    monkeypatch.setenv("CALIBRATOR_PATH", str(missing))
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="refusing to start"):
+            with TestClient(app):
+                pass
+    finally:
+        get_settings.cache_clear()
+
+
+def test_require_auth_without_keys_refuses_to_start(monkeypatch):
+    from app.config import get_settings
+
+    monkeypatch.setenv("REQUIRE_AUTH", "true")
+    monkeypatch.setenv("GATEWAY_API_KEYS", "")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="refusing to start open"):
+            with TestClient(app):
+                pass
+    finally:
+        get_settings.cache_clear()
+
+
+def test_raw_mode_starts_fine_without_a_calibrator_file(monkeypatch, tmp_path):
+    """The default. A checkout that has never run eval must still serve."""
+    from app.config import get_settings
+
+    monkeypatch.setenv("CONFIDENCE_MODE", "raw")
+    monkeypatch.setenv("CALIBRATOR_PATH", str(tmp_path / "nope.json"))
+    monkeypatch.setenv("WARM_MODELS_ON_STARTUP", "false")
+    get_settings.cache_clear()
+    try:
+        with TestClient(app) as c:
+            assert c.app.state.calibrators == {}
+            assert c.get("/livez").status_code == 200
+    finally:
+        get_settings.cache_clear()
+
+
+def test_the_repo_calibrator_file_loads_through_the_lifespan(monkeypatch):
+    """Not used for serving in raw mode, but it must still parse — otherwise
+    flipping CONFIDENCE_MODE would fail at the worst possible moment."""
+    from app.config import get_settings
+
+    monkeypatch.setenv("CONFIDENCE_MODE", "raw")
+    monkeypatch.setenv("WARM_MODELS_ON_STARTUP", "false")
+    get_settings.cache_clear()
+    try:
+        with TestClient(app) as c:
+            assert set(c.app.state.calibrators) == {"small", "large"}
+    finally:
+        get_settings.cache_clear()

@@ -1,7 +1,9 @@
 """Unit tests for app/confidence.py.
 
-No I/O, no network — the module under test is pure functions, which is the
-whole reason it was written that way.
+No network — the module under test is pure functions, which is the whole reason
+it was written that way. The two tests that read `eval/calibrator.json` are the
+exception and are deliberate: that artifact is not exercised by serving (the
+gateway ships `raw`), so without them nothing would notice it rotting.
 
 The fixtures at the bottom are *real* logprob arrays captured from
 qwen2.5:0.5b on 2026-07-28 (see docs/RESEARCH.md §2), not invented ones.
@@ -9,15 +11,19 @@ qwen2.5:0.5b on 2026-07-28 (see docs/RESEARCH.md §2), not invented ones.
 
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 
 import pytest
 
 from app.confidence import (
     EMPTY_METRICS,
+    FEATURE_NAMES,
     LOW_PROB,
     ConfidenceMetrics,
     LogisticCalibrator,
+    calibrators_from_dict,
     evaluate_gate,
     extract_metrics,
     find_hedge,
@@ -278,6 +284,133 @@ def test_calibrator_sigmoid_is_numerically_stable():
     assert cal.predict_proba([1000.0]) == pytest.approx(1.0)
     assert cal.predict_proba([-1000.0]) == pytest.approx(0.0)
     assert 0.0 <= cal.predict_proba([-800.0]) <= 1.0
+
+
+# --------------------------------------------------------------------------
+# calibrator (de)serialization
+#
+# The fit standardizes features before solving, so the weights live in
+# standardized space. Applying them to raw features produces a number in
+# [0, 1] that looks like a probability and is not one — the failure mode this
+# section exists to prevent, since nothing downstream could detect it.
+# --------------------------------------------------------------------------
+
+
+def test_standardization_is_applied_when_present():
+    raw = [0.7, 0.3, 0.5, 4.0, 0.25, 0.15, 30.0]
+    mean = [0.7, 0.3, 0.5, 4.0, 0.25, 0.15, 30.0]
+    scale = [0.1] * 7
+
+    cal = LogisticCalibrator(weights=[5.0] * 7, bias=0.0, mean=mean, scale=scale)
+    # Feature vector sits exactly on the fitted mean -> standardized to all
+    # zeros -> sigmoid(bias) = 0.5, whatever the weights are.
+    assert cal.predict_proba(raw) == pytest.approx(0.5)
+
+    # Without mean/scale the same weights see raw magnitudes and saturate.
+    uncal = LogisticCalibrator(weights=[5.0] * 7, bias=0.0)
+    assert uncal.predict_proba(raw) == pytest.approx(1.0)
+
+
+def test_standardization_shifts_the_score_in_the_right_direction():
+    mean = [0.7, 0.3, 0.5, 4.0, 0.25, 0.15, 30.0]
+    scale = [0.1, 0.1, 0.1, 1.0, 0.1, 0.1, 10.0]
+    cal = LogisticCalibrator(weights=[1.0, 0, 0, 0, 0, 0, 0], bias=0.0,
+                             mean=mean, scale=scale)
+
+    above = cal.predict_proba([0.9, 0.3, 0.5, 4.0, 0.25, 0.15, 30.0])
+    below = cal.predict_proba([0.5, 0.3, 0.5, 4.0, 0.25, 0.15, 30.0])
+    assert above > 0.5 > below
+
+
+def test_mismatched_mean_length_raises_rather_than_scoring():
+    cal = LogisticCalibrator(weights=[1.0] * 7, bias=0.0, mean=[0.0] * 3, scale=[1.0] * 7)
+    with pytest.raises(ValueError, match="mean/scale"):
+        cal.predict_proba([0.5] * 7)
+
+
+def test_calibrators_load_from_the_eval_json_shape():
+    payload = {
+        "calibrators": {
+            "small": {
+                "weights": [0.1] * 7, "bias": -0.5,
+                "mean": [0.0] * 7, "scale": [1.0] * 7,
+                "feature_names": list(FEATURE_NAMES),
+                "fitted_temperature": 0.0, "n_train": 67,
+            },
+            "large": {"weights": [0.2] * 7, "bias": 0.5},
+        }
+    }
+    cals = calibrators_from_dict(payload)
+
+    assert set(cals) == {"small", "large"}
+    assert cals["small"].n_train == 67
+    assert cals["small"].scale == [1.0] * 7
+    # A fit saved without mean/scale is taken at face value, not invented.
+    assert cals["large"].mean == []
+
+
+def test_the_real_calibrator_file_loads():
+    """eval/calibrator.json is a real artifact and must stay loadable.
+
+    It is not used for serving (the gateway ships `raw`), which is exactly why
+    it needs a test — nothing else would notice it rotting.
+    """
+    path = Path(__file__).resolve().parent.parent / "eval" / "calibrator.json"
+    cals = calibrators_from_dict(json.loads(path.read_text()))
+
+    assert set(cals) == {"small", "large"}
+    for gate, cal in cals.items():
+        assert len(cal.weights) == len(FEATURE_NAMES), gate
+        assert len(cal.mean) == len(FEATURE_NAMES), gate
+        assert len(cal.scale) == len(FEATURE_NAMES), gate
+        p = cal.predict_proba([0.7, 0.3, 0.5, 4.0, 0.25, 0.15, 30.0])
+        assert 0.0 <= p <= 1.0, gate
+
+
+def test_calibrators_from_dict_refuses_a_reordered_feature_vector():
+    """A silently reordered vector scores plausible nonsense. Fail loudly."""
+    scrambled = list(FEATURE_NAMES)
+    scrambled[0], scrambled[1] = scrambled[1], scrambled[0]
+    payload = {"calibrators": {"small": {
+        "weights": [0.1] * 7, "bias": 0.0, "feature_names": scrambled}}}
+
+    with pytest.raises(ValueError, match="was fitted on"):
+        calibrators_from_dict(payload)
+
+
+def test_calibrators_from_dict_refuses_a_wrong_weight_count():
+    payload = {"calibrators": {"small": {"weights": [0.1] * 5, "bias": 0.0}}}
+    with pytest.raises(ValueError, match="5 weights"):
+        calibrators_from_dict(payload)
+
+
+def test_empty_payload_is_not_an_error():
+    """A checkout that has never run eval must still start."""
+    assert calibrators_from_dict({}) == {}
+    assert calibrators_from_dict({"calibrators": None}) == {}
+
+
+def test_serving_calibrator_agrees_with_the_eval_one():
+    """app/confidence and eval/calibration must score identically.
+
+    They are separate classes on purpose — eval may use numpy, serving may not
+    — but a divergence would mean the validated ECE describes a model that is
+    not the one making routing decisions.
+    """
+    from eval.calibration import Calibrator as EvalCalibrator
+
+    path = Path(__file__).resolve().parent.parent / "eval" / "calibrator.json"
+    raw = json.loads(path.read_text())["calibrators"]["small"]
+    features = [0.62, 0.21, 0.44, 3.1, 0.31, 0.22, 48.0]
+
+    serving = calibrators_from_dict({"calibrators": {"small": raw}})["small"]
+    reference = EvalCalibrator(
+        weights=raw["weights"], bias=raw["bias"],
+        mean=raw["mean"], scale=raw["scale"],
+    )
+    assert serving.predict_proba(features) == pytest.approx(
+        reference.predict_proba(features), abs=1e-12
+    )
 
 
 # --------------------------------------------------------------------------
