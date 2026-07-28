@@ -56,8 +56,12 @@ async def one(client: httpx.AsyncClient, url: str, prompt: str, key: str) -> dic
         hlr = r.json()["x_hlr"]
         return {"ok": True, "status": 200, "ms": elapsed, "tier": hlr["tier"]}
     except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "status": type(exc).__name__, "ms": (time.perf_counter() - started) * 1000,
-                "tier": None}
+        return {
+            "ok": False,
+            "status": type(exc).__name__,
+            "ms": (time.perf_counter() - started) * 1000,
+            "tier": None,
+        }
 
 
 async def main() -> int:
@@ -95,7 +99,8 @@ async def main() -> int:
     print(f"  wall clock     {wall:.1f}s   ({len(results) / wall:.1f} req/s)")
     print(f"  succeeded      {len(ok)}/{len(results)}")
     if failed:
-        print(f"  FAILED         {len(failed)}  {dict(collections.Counter(r['status'] for r in failed))}")
+        by_status = dict(collections.Counter(r["status"] for r in failed))
+        print(f"  FAILED         {len(failed)}  {by_status}")
     print(f"  latency        p50 {pct(0.50):.0f}ms   p95 {pct(0.95):.0f}ms   "
           f"p99 {pct(0.99):.0f}ms   max {latencies[-1]:.0f}ms" if latencies else "")
     print(f"  served by      {dict(tiers)}")
