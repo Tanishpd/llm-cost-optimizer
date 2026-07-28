@@ -15,6 +15,7 @@ from app.cache.keys import build_key
 from app.config import Settings
 from app.main import app
 from app.providers.base import Completion, ProviderTimeout, ProviderUnavailable
+from app.telemetry import Telemetry
 
 REAL_LOGPROBS = [
     {"token": "Paris", "logprob": -0.0279, "bytes": [80], "top_logprobs": [
@@ -68,6 +69,7 @@ def client_factory():
         stub: StubOllama,
         settings: Settings | None = None,
         cache: ExactCache | None = None,
+        telemetry: Telemetry | None = None,
     ) -> TestClient:
         c = TestClient(app)
         c.app.state.settings = settings or Settings(_env_file=None)
@@ -75,6 +77,9 @@ def client_factory():
         c.app.state.http = None
         c.app.state.redis = None
         c.app.state.exact_cache = cache if cache is not None else ExactCache(None)
+        # Defaults to no-op telemetry — most gateway tests are about the
+        # request path, and telemetry must never affect it.
+        c.app.state.telemetry = telemetry if telemetry is not None else Telemetry(None)
         return c
 
     return _make
@@ -443,6 +448,90 @@ def test_cache_hit_headers(client_factory, live_cache):
     assert r.headers["X-HLR-Tier"] == "cache_exact"
     assert float(r.headers["X-HLR-Cost-Usd"]) == 0.0
     assert float(r.headers["X-HLR-Saved-Usd"]) > 0
+
+
+# --------------------------------------------------------------------------
+# /metrics reflects real traffic
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def live_telemetry():
+    from tests.test_telemetry import FakeRedis as TelemetryFakeRedis
+
+    return Telemetry(TelemetryFakeRedis())
+
+
+def test_metrics_counts_served_tiers(client_factory, live_cache, live_telemetry):
+    c = client_factory(StubOllama(), cache=live_cache, telemetry=live_telemetry)
+    _ask(c)          # miss  -> local_large
+    _ask(c)          # hit   -> cache_exact
+    _ask(c)          # hit   -> cache_exact
+
+    m = c.get("/metrics").json()
+    assert m["requests"] == 3
+    assert m["tiers"]["served"] == {
+        "cache_exact": 2, "cache_semantic": 0, "local_small": 0, "local_large": 1, "frontier": 0
+    }
+    assert sum(m["tiers"]["served"].values()) == m["requests"]  # identity
+
+
+def test_metrics_hit_rate_matches_traffic(client_factory, live_cache, live_telemetry):
+    c = client_factory(StubOllama(), cache=live_cache, telemetry=live_telemetry)
+    _ask(c)
+    _ask(c)
+    m = c.get("/metrics").json()
+    assert m["cache"]["hit_rate"] == pytest.approx(0.5)
+    assert m["cache"]["exact_hit_rate"] == pytest.approx(0.5)
+
+
+def test_metrics_savings_reconcile(client_factory, live_cache, live_telemetry):
+    """The headline number, checkable rather than trusted."""
+    c = client_factory(StubOllama(), cache=live_cache, telemetry=live_telemetry)
+    for _ in range(3):
+        _ask(c)
+    cost = c.get("/metrics").json()["cost"]
+    assert cost["actual_usd"] == 0.0  # all local or cached
+    assert cost["baseline_usd"] > 0
+    assert cost["saved_usd"] == pytest.approx(cost["baseline_usd"] - cost["actual_usd"], abs=1e-9)
+    assert cost["saved_pct"] == pytest.approx(100.0)
+
+
+def test_metrics_recent_log(client_factory, live_cache, live_telemetry):
+    c = client_factory(StubOllama(), cache=live_cache, telemetry=live_telemetry)
+    _ask(c)
+    _ask(c)
+    recent = c.get("/metrics/recent").json()["requests"]
+    assert len(recent) == 2
+    assert recent[0]["tier"] == "cache_exact"  # newest first
+    assert recent[1]["tier"] == "local_large"
+
+
+def test_metrics_reset(client_factory, live_cache, live_telemetry):
+    c = client_factory(StubOllama(), cache=live_cache, telemetry=live_telemetry)
+    _ask(c)
+    c.delete("/metrics")
+    assert c.get("/metrics").json()["requests"] == 0
+
+
+def test_metrics_without_redis_still_renders(client_factory):
+    """A dashboard must show "no data", not error."""
+    c = client_factory(StubOllama())  # Telemetry(None)
+    m = c.get("/metrics").json()
+    assert m["requests"] == 0
+    assert m["degraded"] == ["redis_unavailable"]
+    assert "cost" in m and "tiers" in m
+
+
+def test_telemetry_failure_does_not_fail_the_request(client_factory, live_cache):
+    """A served answer must not be lost because recording it failed."""
+    from tests.test_telemetry import FakeRedis as TelemetryFakeRedis
+
+    broken = Telemetry(TelemetryFakeRedis(fail_on={"execute"}))
+    c = client_factory(StubOllama(), cache=live_cache, telemetry=broken)
+    r = _ask(c)
+    assert r.status_code == 200
+    assert r.json()["choices"][0]["message"]["content"] == "Paris"
 
 
 # --------------------------------------------------------------------------
