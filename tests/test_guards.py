@@ -185,3 +185,39 @@ def test_argument_order_swap_is_a_known_gap():
     is high. Catching this needs parsing, not lexical sets. Pinned as a known
     limitation so it is a documented gap rather than an undiscovered bug."""
     assert check_pair("convert USD to EUR", "convert EUR to USD").passed is True
+
+
+# --------------------------------------------------------------------------
+# over-rejection — found by the demo, not by the original tests
+# --------------------------------------------------------------------------
+
+
+def test_sentence_initial_common_words_are_not_entities():
+    """The demo caught this: "Answer in one word." vs "One word." rejected a
+    genuine paraphrase, because both "Answer" and "One" are capitalized only by
+    sentence position and were read as proper nouns."""
+    stored = "What is the capital of France? Answer in one word."
+    query = "What's the capital city of France? One word."
+    assert extract_entities(stored) == {"france"}
+    assert extract_entities(query) == {"france"}
+    assert check_pair(query, stored).passed is True
+
+
+def test_a_word_seen_lowercase_is_not_a_proper_noun():
+    """The general rule behind the fix — the stopword list will always be
+    incomplete, so this catches what it misses."""
+    assert check_pair("Widget costs 5", "the widget costs 5").passed is True
+
+
+def test_real_proper_nouns_survive_the_lowercase_rule():
+    """The fix must not weaken the guard: a name never written lowercase is
+    still an entity, so genuinely different subjects still mismatch."""
+    assert check_pair("Who founded Google?", "Who founded Microsoft?").passed is False
+    assert check_pair("capital of Australia?", "capital of Austria?").passed is False
+
+
+@pytest.mark.parametrize("opener", [
+    "Answer", "One", "Just", "Only", "Return", "Provide", "Compute", "Each", "Now",
+])
+def test_common_instruction_openers_are_stopwords(opener):
+    assert opener.lower() not in extract_entities(f"{opener} the value for France.")

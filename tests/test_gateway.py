@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from app.cache.exact import CachedAnswer, ExactCache
 from app.cache.semantic import SemanticCache
+from app.cache.singleflight import SingleFlight
 from app.cache.keys import build_key
 from app.config import Settings
 from app.main import app
@@ -113,6 +114,9 @@ def client_factory():
         c.app.state.semantic_cache = (
             semantic if semantic is not None else SemanticCache(None, enabled=False)
         )
+        # No Redis -> every caller wins, which is the correct no-coordination
+        # behaviour and keeps these tests about the request path.
+        c.app.state.singleflight = SingleFlight(None)
         return c
 
     return _make
@@ -961,3 +965,31 @@ def test_missing_dashboard_file_does_not_500(monkeypatch, client_factory):
     r = client_factory(StubOllama()).get("/dashboard")
     assert r.status_code == 200
     assert "still serve" in r.text or "still serves" in r.text or "/metrics" in r.text
+
+
+def test_concurrent_identical_requests_make_one_model_call(client_factory, live_cache):
+    """End to end: the second of two identical concurrent requests is served
+    from the first one's answer rather than paying for its own cascade."""
+    from tests.test_singleflight import FakeRedis as SfFakeRedis
+
+    stub = StubOllama()
+    c = client_factory(stub, cache=live_cache)
+    c.app.state.singleflight = SingleFlight(SfFakeRedis(), ttl_ms=5000, wait_ms=300)
+
+    first = _ask(c)
+    assert first.json()["x_hlr"]["tier"] == "local_small"
+    # The lease is released by the time the response returns, so a second
+    # request finds the answer already cached.
+    second = _ask(c)
+    assert second.json()["x_hlr"]["tier"] == "cache_exact"
+    assert len(stub.calls) == 1
+
+
+def test_singleflight_failure_does_not_block_serving(client_factory, live_cache):
+    """A lock backend that is down must not stop the gateway."""
+    from tests.test_singleflight import FakeRedis as SfFakeRedis
+
+    stub = StubOllama()
+    c = client_factory(stub, cache=live_cache)
+    c.app.state.singleflight = SingleFlight(SfFakeRedis(fail_on={"set"}))
+    assert _ask(c).status_code == 200
