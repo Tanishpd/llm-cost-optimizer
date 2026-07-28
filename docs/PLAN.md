@@ -278,6 +278,12 @@ degraded gateway must still answer. Add trace IDs, timeouts, single-flight stamp
 | `OLLAMA_NUM_CTX` | `2048` | Context window; keeps RAM sane on 8 GB |
 | `OLLAMA_KEEP_ALIVE` | `10m` | Avoid cold reloads between requests |
 | `OLLAMA_MAX_LOADED_MODELS` | `2` | **Do not raise on 8 GB** — see RAM note above |
+| `OLLAMA_TIMEOUT_S` | `120` | Read timeout for a local generation |
+| `OLLAMA_CONNECT_TIMEOUT_S` | `5` | Connect timeout; short, so a dead Ollama degrades fast |
+| `FRONTIER_TIMEOUT_S` | `60` | Read timeout for the frontier tier |
+| `DEFAULT_MAX_TOKENS` | `512` | When the request omits `max_tokens` |
+| `DEFAULT_TEMPERATURE` | `0.0` | When the request omits `temperature` |
+| `WARM_MODELS_ON_STARTUP` | `true` | 1-token call per chat model in the lifespan, so the first real request skips the ~1.9 s cold load measured in M0 |
 | `FRONTIER_BASE_URL` | `http://localhost:8001/v1` | Point at a real provider to go live |
 | `FRONTIER_API_KEY` | `mock-key` | Bearer token |
 | `FRONTIER_MODEL` | `gpt-4o-mock` | Escalation model name |
