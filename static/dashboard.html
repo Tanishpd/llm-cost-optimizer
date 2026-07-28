@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Cost Optimizer — live</title>
+<style>
+/* Self-contained: no CDN, no external fonts, no network at render time.
+   A dashboard that needs the internet to draw is a dashboard that breaks
+   in exactly the situation you built it to observe. */
+:root {
+  color-scheme: light;
+  --surface-1: #fcfcfb;
+  --page: #f9f9f7;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --grid: #e1e0d9;
+  --baseline: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  /* Ordinal ramp, cheapest → most expensive. One hue, monotone lightness:
+     darker literally means "cost more". Validated --ordinal, light mode. */
+  --tier-cache-exact:    #86b6ef;
+  --tier-cache-semantic: #5598e7;
+  --tier-local-small:    #2a78d6;
+  --tier-local-large:    #1c5cab;
+  --tier-frontier:       #104281;
+  --good: #0ca30c;
+  --warning: #fab219;
+  --critical: #d03b3b;
+  --success-text: #006300;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --page: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255,255,255,0.10);
+    /* Same hue, re-stepped for the dark surface — not an inverted flip. */
+    --tier-cache-exact:    #184f95;
+    --tier-cache-semantic: #256abf;
+    --tier-local-small:    #3987e5;
+    --tier-local-large:    #6da7ec;
+    --tier-frontier:       #9ec5f4;
+    --success-text: #0ca30c;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-1: #1a1a19; --page: #0d0d0d;
+  --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
+  --grid: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,0.10);
+  --tier-cache-exact: #184f95; --tier-cache-semantic: #256abf;
+  --tier-local-small: #3987e5; --tier-local-large: #6da7ec; --tier-frontier: #9ec5f4;
+  --success-text: #0ca30c;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 24px;
+  background: var(--page); color: var(--text-primary);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.wrap { max-width: 1100px; margin: 0 auto; }
+header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+h1 { font-size: 18px; font-weight: 600; margin: 0; }
+.sub { color: var(--text-secondary); font-size: 13px; }
+.spacer { flex: 1; }
+.pill {
+  font-size: 12px; padding: 3px 9px; border-radius: 99px;
+  border: 1px solid var(--border); color: var(--text-secondary);
+}
+.pill.ok { color: var(--success-text); }
+.pill.degraded { color: var(--text-primary); }
+.pill .dot { display: inline-block; width: 7px; height: 7px; border-radius: 99px; margin-right: 5px; }
+
+.card {
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 10px; padding: 18px; margin-bottom: 16px;
+}
+.card h2 {
+  font-size: 12px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--text-muted); margin: 0 0 14px;
+}
+
+/* Hero: the one number the dashboard leads with. */
+.hero { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.hero .figure { font-size: 52px; font-weight: 600; line-height: 1; letter-spacing: -0.02em; }
+.hero .of { color: var(--text-secondary); font-size: 14px; }
+.hero .pct { color: var(--success-text); font-size: 15px; font-weight: 600; }
+
+/* KPI row */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px;
+        background: var(--border); border-radius: 8px; overflow: hidden; }
+.kpi { background: var(--surface-1); padding: 14px 16px; }
+.kpi .label { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+.kpi .value { font-size: 24px; font-weight: 600; line-height: 1.1; }
+.kpi .note { font-size: 12px; color: var(--text-secondary); margin-top: 3px; }
+
+/* Stacked bar. 2px surface gaps between segments, 4px rounded data-ends. */
+.stack { display: flex; height: 30px; gap: 2px; margin-bottom: 12px; }
+.seg { min-width: 3px; transition: opacity .12s; cursor: default; }
+.seg:first-child { border-radius: 4px 0 0 4px; }
+.seg:last-child { border-radius: 0 4px 4px 0; }
+.seg:hover { opacity: .78; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; }
+.legend .item { display: flex; align-items: center; gap: 7px; }
+.legend .swatch { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+.legend .n { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+/* Latency bars: same tier colors, so a tier keeps its identity across charts. */
+.lat { display: grid; grid-template-columns: 108px 1fr 84px; align-items: center;
+       gap: 10px; margin-bottom: 7px; font-size: 13px; }
+.lat .name { color: var(--text-secondary); }
+.lat .track { background: var(--grid); border-radius: 4px; height: 15px; position: relative;
+              overflow: hidden; }
+/* p95 is the pale extent, p50 the solid bar drawn over it — absolutely
+   positioned, because an inline span ignores width entirely. */
+.lat .fill { position: absolute; inset: 0 auto 0 0; border-radius: 4px; min-width: 2px; }
+.lat .p95 { opacity: .3; }
+.lat .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-weight: 500; color: var(--text-muted); font-size: 12px;
+     padding: 0 10px 8px 0; border-bottom: 1px solid var(--grid); }
+td { padding: 9px 10px 9px 0; border-bottom: 1px solid var(--grid);
+     vertical-align: top; color: var(--text-secondary); }
+td.tier { color: var(--text-primary); white-space: nowrap; }
+td.reason { color: var(--text-secondary); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tag { display: inline-flex; align-items: center; gap: 6px; }
+.tag .swatch { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.path { font-size: 12px; color: var(--text-muted); }
+.empty { color: var(--text-muted); padding: 22px 0; text-align: center; }
+.foot { color: var(--text-muted); font-size: 12px; margin-top: 18px; }
+.foot code { background: var(--grid); padding: 1px 5px; border-radius: 3px; }
+.banner {
+  border: 1px solid var(--border); border-left: 3px solid var(--warning);
+  border-radius: 6px; padding: 10px 14px; margin-bottom: 16px;
+  font-size: 13px; color: var(--text-secondary); background: var(--surface-1);
+}
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 780px) { .cols { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>LLM Cost Optimizer</h1>
+    <span class="sub" id="dataset-note"></span>
+    <span class="spacer"></span>
+    <span class="pill" id="health"><span class="dot"></span><span id="health-text">…</span></span>
+    <span class="pill" id="mode">…</span>
+  </header>
+
+  <div id="banner"></div>
+
+  <div class="card">
+    <h2>Saved vs an all-frontier baseline</h2>
+    <div class="hero">
+      <span class="figure" id="saved">$0.00</span>
+      <span class="of">of <span id="baseline">$0.00</span> that this traffic would have cost</span>
+      <span class="pct" id="saved-pct"></span>
+    </div>
+  </div>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="cols" style="margin-top:16px">
+    <div class="card">
+      <h2>Which tier served each request</h2>
+      <div class="stack" id="stack"></div>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div class="card">
+      <h2>Latency p50 / p95 by stage</h2>
+      <div id="latency"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Live requests</h2>
+    <table>
+      <thead><tr>
+        <th style="width:150px">Tier</th><th>Why</th>
+        <th class="num" style="width:78px">Latency</th><th class="num" style="width:82px">Saved</th>
+      </tr></thead>
+      <tbody id="log"></tbody>
+    </table>
+  </div>
+
+  <p class="foot">
+    Auto-refreshes every 3s from <code>/metrics</code> and <code>/metrics/recent</code>.
+    Local tiers bill $0 and the baseline prices every request — cache hits included — at
+    frontier rates; both assumptions are documented in <code>docs/DECISIONS.md</code> D13.
+  </p>
+</div>
+
+<script>
+const TIERS = [
+  ["cache_exact",    "Exact cache",    "var(--tier-cache-exact)"],
+  ["cache_semantic", "Semantic cache", "var(--tier-cache-semantic)"],
+  ["local_small",    "qwen2.5:0.5b",   "var(--tier-local-small)"],
+  ["local_large",    "qwen2.5:3b",     "var(--tier-local-large)"],
+  ["frontier",       "Frontier API",   "var(--tier-frontier)"],
+];
+const COLOR = Object.fromEntries(TIERS.map(([k, , c]) => [k, c]));
+const LABEL = Object.fromEntries(TIERS.map(([k, l]) => [k, l]));
+
+const usd = (n) => "$" + (n < 0.01 ? n.toFixed(6) : n.toFixed(2));
+const pct = (n) => (n * 100).toFixed(0) + "%";
+const ms  = (n) => n >= 1000 ? (n / 1000).toFixed(1) + "s"
+                 : n >= 1     ? Math.round(n) + "ms"
+                 : n > 0      ? "<1ms"          // never round a real timing to "0ms"
+                 : "0ms";
+const el  = (id) => document.getElementById(id);
+
+function kpi(label, value, note) {
+  return `<div class="kpi"><div class="label">${label}</div>
+          <div class="value">${value}</div>
+          ${note ? `<div class="note">${note}</div>` : ""}</div>`;
+}
+
+function render(m, recent, health) {
+  // ---- health -------------------------------------------------------
+  const status = health?.status ?? "unknown";
+  const dotColor = status === "ok" ? "var(--good)"
+                 : status === "degraded" ? "var(--warning)" : "var(--critical)";
+  el("health").className = "pill " + (status === "ok" ? "ok" : "degraded");
+  el("health").querySelector(".dot").style.background = dotColor;
+  // Status never rides on colour alone — the word is always present.
+  el("health-text").textContent = status;
+  const mode = m.degraded?.length ? `degraded: ${m.degraded.join(", ")}` : "";
+  el("mode").textContent = health?.config?.confidence_mode
+    ? `confidence: ${health.config.confidence_mode}` : "";
+
+  el("banner").innerHTML = mode
+    ? `<div class="banner"><strong>Running degraded.</strong> ${mode} — the gateway is still
+       serving; see <code>/healthz</code>.</div>` : "";
+
+  // ---- hero ---------------------------------------------------------
+  const cost = m.cost ?? {};
+  el("saved").textContent = usd(cost.saved_usd ?? 0);
+  el("baseline").textContent = usd(cost.baseline_usd ?? 0);
+  el("saved-pct").textContent = (m.requests ?? 0) ? `${cost.saved_pct ?? 0}% saved` : "";
+
+  // ---- KPI row ------------------------------------------------------
+  const gates = m.gates ?? {};
+  const served = m.tiers?.served ?? {};
+  el("kpis").innerHTML = [
+    kpi("Requests", (m.requests ?? 0).toLocaleString()),
+    kpi("Cache hit rate", pct(m.cache?.hit_rate ?? 0),
+        `exact ${pct(m.cache?.exact_hit_rate ?? 0)} · semantic ${pct(m.cache?.semantic_hit_rate ?? 0)}`),
+    kpi("Gate 1 escalated", pct(gates.small?.escalation_rate ?? 0),
+        `${gates.small?.escalated ?? 0} of ${gates.small?.evaluated ?? 0} evaluated`),
+    kpi("Gate 2 escalated", pct(gates.large?.escalation_rate ?? 0),
+        `${gates.large?.escalated ?? 0} of ${gates.large?.evaluated ?? 0} evaluated`),
+    kpi("Reached the frontier", (served.frontier ?? 0).toLocaleString(),
+        `${pct((served.frontier ?? 0) / Math.max(m.requests ?? 0, 1))} of traffic`),
+  ].join("");
+
+  // ---- stacked bar + legend (legend always present for >=2 series) ---
+  const total = TIERS.reduce((s, [k]) => s + (served[k] ?? 0), 0);
+  el("stack").innerHTML = total === 0 ? "" : TIERS
+    .filter(([k]) => (served[k] ?? 0) > 0)
+    .map(([k, label, c]) => {
+      const n = served[k];
+      return `<div class="seg" style="flex:${n};background:${c}"
+                   title="${label}: ${n} (${pct(n / total)})"></div>`;
+    }).join("");
+  el("legend").innerHTML = total === 0
+    ? `<span class="empty">No requests yet.</span>`
+    : TIERS.map(([k, label, c]) =>
+        `<span class="item"><span class="swatch" style="background:${c}"></span>
+         ${label} <span class="n">${served[k] ?? 0}${total ? ` · ${pct((served[k] ?? 0) / total)}` : ""}</span></span>`
+      ).join("");
+
+  // ---- latency ------------------------------------------------------
+  const lat = m.latency_ms ?? {};
+  const order = ["cache_exact", "cache_semantic", "route", "local_small", "local_large",
+                 "frontier", "end_to_end"];
+  const rows = order.filter((k) => lat[k]?.n);
+  const max = Math.max(...rows.map((k) => lat[k].p95), 1);
+  el("latency").innerHTML = rows.length === 0
+    ? `<div class="empty">No timings yet.</div>`
+    : rows.map((k) => {
+        const c = COLOR[k] ?? "var(--baseline)";
+        const p50w = (lat[k].p50 / max) * 100, p95w = (lat[k].p95 / max) * 100;
+        return `<div class="lat">
+          <span class="name">${LABEL[k] ?? k.replace(/_/g, " ")}</span>
+          <span class="track" title="p50 ${ms(lat[k].p50)} · p95 ${ms(lat[k].p95)} · n=${lat[k].n}">
+            <span class="fill p95" style="width:${p95w}%;background:${c}"></span>
+            <span class="fill" style="width:${p50w}%;background:${c}"></span>
+          </span>
+          <span class="val">${ms(lat[k].p50)} / ${ms(lat[k].p95)}</span>
+        </div>`;
+      }).join("");
+
+  // ---- live log -----------------------------------------------------
+  el("log").innerHTML = (recent ?? []).length === 0
+    ? `<tr><td colspan="4" class="empty">No requests yet — send one to
+       <code>/v1/chat/completions</code>.</td></tr>`
+    : recent.map((r) => {
+        const c = COLOR[r.tier] ?? "var(--baseline)";
+        const saved = Number(r.baseline_micro_usd ?? 0) - Number(r.cost_micro_usd ?? 0);
+        const path = (r.path ?? []).length > 1 ? `<div class="path">${r.path.join(" → ")}</div>` : "";
+        return `<tr>
+          <td class="tier"><span class="tag"><span class="swatch" style="background:${c}"></span>
+            ${LABEL[r.tier] ?? (r.tier || "—")}</span>${path}</td>
+          <td class="reason">${(r.reason ?? "").replace(/</g, "&lt;")}</td>
+          <td class="num">${ms(r.latency_ms?.total ?? 0)}</td>
+          <td class="num">${usd(saved / 1e6)}</td>
+        </tr>`;
+      }).join("");
+}
+
+async function tick() {
+  try {
+    const [m, recent, health] = await Promise.all([
+      fetch("/metrics").then((r) => r.json()),
+      fetch("/metrics/recent?count=12").then((r) => r.json()).then((d) => d.requests),
+      fetch("/healthz").then((r) => r.json()).catch(() => null),
+    ]);
+    render(m, recent, health);
+  } catch (err) {
+    // A dashboard that blanks on a transient fetch error is worse than one
+    // showing slightly stale numbers. Keep the last render, say so.
+    el("dataset-note").textContent = "· reconnecting…";
+    return;
+  }
+  el("dataset-note").textContent = "· live";
+}
+
+tick();
+setInterval(tick, 3000);
+</script>
+</body>
+</html>

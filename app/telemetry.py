@@ -241,6 +241,7 @@ class Telemetry:
                 "frontier_in": cost.get("frontier_in", 0),
                 "frontier_out": cost.get("frontier_out", 0),
             },
+            "latency_ms": await self.latency_percentiles(),
             "model_loads": {
                 "cold_loads": loads.get("cold_loads", 0),
                 "mean_load_ms": (
@@ -250,6 +251,50 @@ class Telemetry:
                 ),
             },
             "degraded": [],
+        }
+
+    async def latency_percentiles(self, *, sample: int = 2000) -> dict[str, dict[str, float]]:
+        """p50/p95 per stage, plus end-to-end.
+
+        Computed from the stream rather than kept as running counters: exact
+        percentiles need the distribution, and a streaming approximation is not
+        worth the complexity for a dashboard endpoint that is never on the
+        request path.
+
+        Bounded by `sample` so a full 10k-entry stream cannot make `/metrics`
+        slow. The bound is reported in the payload rather than left implicit —
+        a percentile over a truncated window is a different number, and saying
+        so is cheaper than someone discovering it later.
+        """
+        if self._redis is None:
+            return {}
+        try:
+            entries = await self._redis.xrevrange(STREAM_KEY, count=sample)
+        except RedisError:
+            return {}
+
+        buckets: dict[str, list[float]] = {}
+        for _id, fields in entries:
+            raw = fields.get("latency_ms") if isinstance(fields, dict) else None
+            if raw is None:
+                continue
+            try:
+                stages = json.loads(raw if isinstance(raw, str) else raw.decode())
+            except (ValueError, AttributeError):
+                continue
+            for stage, value in (stages or {}).items():
+                if isinstance(value, int | float):
+                    buckets.setdefault("end_to_end" if stage == "total" else stage, []).append(
+                        float(value)
+                    )
+
+        return {
+            stage: {
+                "p50": _percentile(values, 0.50),
+                "p95": _percentile(values, 0.95),
+                "n": len(values),
+            }
+            for stage, values in sorted(buckets.items())
         }
 
     async def recent(self, count: int = 20) -> list[dict[str, Any]]:
@@ -291,6 +336,19 @@ class Telemetry:
             return 0
 
 
+def _percentile(values: list[float], q: float) -> float:
+    """Linear-interpolated percentile. numpy is available, but keeping this
+    module import-light means telemetry can be exercised without it."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return round(ordered[0], 1)
+    pos = q * (len(ordered) - 1)
+    lo, hi = int(pos), min(int(pos) + 1, len(ordered) - 1)
+    return round(ordered[lo] + (ordered[hi] - ordered[lo]) * (pos - lo), 1)
+
+
 def _empty_metrics(*, degraded: list[str] | None = None) -> dict[str, Any]:
     """Structurally complete zeros, so a dashboard renders "no data" rather
     than KeyError-ing on a missing section."""
@@ -314,6 +372,7 @@ def _empty_metrics(*, degraded: list[str] | None = None) -> dict[str, Any]:
             "in": 0, "out": 0, "baseline_in": 0, "baseline_out": 0,
             "frontier_in": 0, "frontier_out": 0,
         },
+        "latency_ms": {},
         "model_loads": {"cold_loads": 0, "mean_load_ms": 0.0},
         "degraded": degraded or [],
     }

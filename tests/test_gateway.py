@@ -387,7 +387,7 @@ def test_healthz_reports_active_thresholds(client_factory):
 
 def test_root_describes_current_milestone(client_factory):
     c = client_factory(StubOllama())
-    assert "M5" in c.get("/").json()["milestone"]
+    assert "M7" in c.get("/").json()["milestone"]
 
 
 # --------------------------------------------------------------------------
@@ -912,3 +912,52 @@ def test_guard_rejections_reach_metrics(client_factory, live_cache, live_semanti
 
     rejections = c.get("/metrics").json()["cache"]["guard_rejections"]
     assert rejections.get("entity_mismatch") == 1
+
+
+# --------------------------------------------------------------------------
+# M7: dashboard
+# --------------------------------------------------------------------------
+
+
+def test_dashboard_serves_html(client_factory):
+    c = client_factory(StubOllama())
+    r = c.get("/dashboard")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    assert "<title>" in r.text
+
+
+def test_dashboard_is_self_contained(client_factory):
+    """No CDN, no external fonts, no remote anything. A dashboard that needs
+    the internet to draw breaks in exactly the situation it exists to observe."""
+    body = client_factory(StubOllama()).get("/dashboard").text
+    for pattern in ("http://", "https://", "//cdn", "@import"):
+        assert pattern not in body, f"external reference found: {pattern}"
+
+
+def test_dashboard_reads_only_public_endpoints(client_factory):
+    """Anything the page shows must be checkable with curl."""
+    body = client_factory(StubOllama()).get("/dashboard").text
+    assert "/metrics" in body and "/healthz" in body
+
+
+def test_dashboard_supports_both_themes(client_factory):
+    body = client_factory(StubOllama()).get("/dashboard").text
+    assert "prefers-color-scheme: dark" in body
+    assert 'data-theme="dark"' in body
+
+
+def test_dashboard_names_status_not_just_colours(client_factory):
+    """Status must never ride on colour alone."""
+    body = client_factory(StubOllama()).get("/dashboard").text
+    assert "health-text" in body
+
+
+def test_missing_dashboard_file_does_not_500(monkeypatch, client_factory):
+    """Losing the static file should never look like the gateway failing."""
+    import app.dashboard as dash
+
+    monkeypatch.setattr(dash, "DASHBOARD_PATH", dash.STATIC_DIR / "nope.html")
+    r = client_factory(StubOllama()).get("/dashboard")
+    assert r.status_code == 200
+    assert "still serve" in r.text or "still serves" in r.text or "/metrics" in r.text

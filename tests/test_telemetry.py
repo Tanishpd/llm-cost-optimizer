@@ -324,3 +324,58 @@ async def test_live_redis_stream_and_counters():
     finally:
         await t.reset()
         await redis.aclose()
+
+
+# --------------------------------------------------------------------------
+# latency percentiles
+# --------------------------------------------------------------------------
+
+
+async def test_percentiles_are_computed_per_stage(telemetry):
+    for ms in (10.0, 20.0, 30.0, 40.0, 100.0):
+        await telemetry.record(record(latency_ms={"local_small": ms, "total": ms + 1}))
+    p = await telemetry.latency_percentiles()
+    assert p["local_small"]["p50"] == pytest.approx(30.0, abs=0.1)
+    assert p["local_small"]["p95"] >= 40.0
+    assert p["local_small"]["n"] == 5
+
+
+async def test_total_is_reported_as_end_to_end(telemetry):
+    """`total` in a record is the end-to-end figure; naming it so in the
+    aggregate keeps it from reading as another stage."""
+    await telemetry.record(record(latency_ms={"total": 42.0}))
+    p = await telemetry.latency_percentiles()
+    assert "end_to_end" in p
+    assert "total" not in p
+
+
+async def test_stages_are_tracked_independently(telemetry):
+    await telemetry.record(record(latency_ms={"cache_exact": 1.0, "total": 1.0}))
+    await telemetry.record(record(latency_ms={"local_large": 500.0, "total": 500.0}))
+    p = await telemetry.latency_percentiles()
+    assert p["cache_exact"]["p50"] == pytest.approx(1.0)
+    assert p["local_large"]["p50"] == pytest.approx(500.0)
+    assert p["cache_exact"]["n"] == 1  # a stage that didn't run isn't counted
+
+
+async def test_percentiles_survive_an_unparseable_record(telemetry):
+    """One corrupt entry must not lose the whole distribution."""
+    await telemetry.record(record(latency_ms={"total": 10.0}))
+    telemetry._redis.stream.append(("9-0", {"latency_ms": "{not json"}))
+    assert (await telemetry.latency_percentiles())["end_to_end"]["n"] == 1
+
+
+async def test_percentiles_without_redis_are_empty():
+    assert await Telemetry(None).latency_percentiles() == {}
+
+
+async def test_metrics_includes_latency(telemetry):
+    await telemetry.record(record(latency_ms={"local_small": 5.0, "total": 6.0}))
+    m = await telemetry.metrics()
+    assert "latency_ms" in m
+    assert m["latency_ms"]["local_small"]["p50"] == pytest.approx(5.0)
+
+
+async def test_empty_metrics_has_a_latency_section():
+    """Structurally complete zeros — a dashboard reads this key unconditionally."""
+    assert "latency_ms" in await Telemetry(None).metrics()
