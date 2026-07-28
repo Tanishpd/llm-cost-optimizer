@@ -179,6 +179,8 @@ every judgment call toward missing.
 | Timeouts, retries, breakers | `app/resilience.py` — wraps any awaitable; knows nothing about tiers |
 | Log format / trace id | `app/logging_setup.py` |
 | Prove the docs still match | `scripts/check_docs.py` — add a check when you add an invariant |
+| Prove the dashboard still works | `tests/test_dashboard.py` — parses *and executes* its JS |
+| Prove a new setting does something | `tests/test_wiring.py` — every knob is tested or declared inert |
 | Prove it survives load | `scripts/loadtest.py` — asserts cost identities, not just latency |
 
 ## Extending
@@ -260,10 +262,10 @@ which is worse than shared but far better than none.
 
 ## Current state
 
-**M0–M12 complete (2026-07-28).** The gateway runs and is hardened: all five tiers, both gates, eval
+**M0–M13 complete (2026-07-28).** The gateway runs and is hardened: all five tiers, both gates, eval
 harness, dashboard, auth, shared rate limiting, circuit breakers, structured logging, container
-image, streaming, per-tenant budgets, a durable audit trail. **686 unit + 10 integration
-tests**, 123 doc-consistency checks. `python3 scripts/demo.py`
+image, streaming, per-tenant budgets, a durable audit trail. **707 unit + 10 integration
+tests** at 96% coverage, 127 doc-consistency checks. `python3 scripts/demo.py`
 walks every tier.
 
 **Shipping in `raw` confidence mode, not `calibrated`** — M6 fitted both calibrators and gate

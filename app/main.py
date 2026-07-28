@@ -394,6 +394,8 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
     latency: dict[str, float] = {}
     degraded: list[str] = []
 
+    _apply_sampling_defaults(body, settings)
+
     # ---- budget ----------------------------------------------------------
     # Resolved up front so a cache hit reports the tenant too, and because the
     # answer depends only on who is calling. Costs nothing unless a cap is
@@ -868,6 +870,32 @@ async def _record(
     ))
 
 
+def _apply_sampling_defaults(body: ChatCompletionRequest, settings: Settings) -> None:
+    """Fill in `temperature` / `max_tokens` from operator policy when the
+    caller omitted them.
+
+    `DEFAULT_TEMPERATURE` and `DEFAULT_MAX_TOKENS` are the operator's defaults;
+    the schema's own values exist only so the model validates.
+    `model_fields_set` is what separates "the caller asked for 512" from "the
+    caller said nothing" — without it an operator could not lower the default,
+    because every request would look like it had explicitly requested 512.
+
+    Both `/v1/chat/completions` and `/route` call this, and must: temperature
+    and max_tokens are part of the cache key (invariant 5), so a request that
+    inherits a default has to hash the same as one that stated it. If only one
+    endpoint applied them, `/route`'s cache preview would disagree with the
+    real lookup.
+
+    These two settings were defined, documented in `.env.example` and PLAN.md,
+    and read by nothing at all until `tests/test_wiring.py` asked what every
+    setting does.
+    """
+    if "temperature" not in body.model_fields_set:
+        body.temperature = settings.default_temperature
+    if "max_tokens" not in body.model_fields_set:
+        body.max_tokens = settings.default_max_tokens
+
+
 def budget_reason(reason: str, verdict) -> str:
     """Prepend the budget's fingerprint to the routing reason when it changed
     the route.
@@ -1152,6 +1180,7 @@ async def route_only(body: ChatCompletionRequest, request: Request) -> RouteDeci
     Redis lookup. No generation happens either way.
     """
     settings = _settings(request)
+    _apply_sampling_defaults(body, settings)
     decision = decide(
         body.user_prompt,
         system_prompt=body.system_prompt,

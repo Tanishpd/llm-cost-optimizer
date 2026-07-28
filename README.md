@@ -3,9 +3,9 @@
 An API gateway that sits in front of several models of escalating cost and decides — per request —
 the cheapest one that will actually do the job.
 
-> **Status: M0–M12 complete. The gateway runs, and it's hardened.**
+> **Status: M0–M13 complete. The gateway runs, and it's hardened.**
 > All five tiers, both confidence gates, the eval harness and the dashboard are built and working —
-> **686 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
+> **707 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
 > rate
 > limiting, per-tenant budgets, a durable audit trail, circuit breakers, structured
 > logging and a container image are in. Run
@@ -431,7 +431,7 @@ from exactly-summed integer token counters.
 
 ## Milestones
 
-Thirteen milestones, each independently runnable. M0 came first deliberately: it resolves the one
+Fourteen milestones, each independently runnable. M0 came first deliberately: it resolves the one
 assumption everything else rests on, before anything is built on top of it.
 
 | | Milestone | State |
@@ -449,10 +449,11 @@ assumption everything else rests on, before anything is built on top of it.
 | **M10** | Multi-worker, breakers, container, load test | **done** |
 | **M11** | Streaming, by buffering first | **done** — reverses D8 |
 | **M12** | Tenancy, budgets, durable audit trail | **done** |
+| **M13** | Test the dashboard and the wiring | **done** — found a dead setting |
 
 ```
 $ .venv/bin/python -m pytest -q -m "not integration"
-686 passed, 10 deselected in 3.34s
+707 passed, 10 deselected in 4.81s
 
 $ .venv/bin/python scripts/preflight.py
   ✓ python 3.14.6   ✓ venv   ✓ disk 34.1 GB free   ! swap 87%
@@ -462,7 +463,7 @@ $ .venv/bin/python scripts/preflight.py
   ✓ redis reachable, no modules (brute-force cosine, as designed)
 
 $ .venv/bin/python scripts/check_docs.py
-  all 123 checks passed
+  all 127 checks passed
 ```
 
 The 10 integration tests need a live Ollama — one also needs the `openai` SDK, because a

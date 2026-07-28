@@ -496,6 +496,77 @@ could not be enqueued — without it the writer drained everything and then
 blocked on `get()` until the timeout fired, a 5-second stall on exit under
 exactly the sustained load that filled the queue.
 
+### M13 — Testing the two things tests kept missing ✅ DONE (2026-07-28)
+
+Prompted by a direct question — *is it tested at a production grade?* — and
+answered by counting rather than asserting. Fourteen real defects were found
+across this project's life; **one** was caught by the unit suite. The rest came
+from CI, the load test, the demo, screenshots, or reading code against docs.
+Coverage sat at ~95% throughout.
+
+That is not a bad suite. It is a suite aimed at one class of bug while this
+project mostly produces two others.
+
+**Rendering.** `static/dashboard.html` was 380 lines with exactly one assertion
+about it ("contains no `http://`"). Its JavaScript was never parsed, let alone
+run — which is how `${LABEL[r.tier] ?? r.tier || "—"}`, a SyntaxError, blanked
+the entire page while 441 tests passed. Demonstrated still-open by injecting
+the same defect and watching 686 tests, 123 doc checks and ruff all pass.
+
+`tests/test_dashboard.py` now attacks it in four escalating steps: the JS
+parses (`node --check`), every `el("x")` matches an `id="x"`, every fetched URL
+is a real route, and `render()` executes against a real `/metrics` payload
+under a DOM shim. Fault-injected against all four:
+
+    original ?? / || SyntaxError   -> 5 failed
+    renamed element id             -> 2 failed
+    fetches a route that is gone   -> 1 failed
+    runtime error inside render()  -> 4 failed
+
+The fourth is why this beats a linter: it runs the renderer against JSON the
+gateway actually produced, so a field renamed in `telemetry.py` breaks a test
+instead of a panel.
+
+**Wiring.** Unit tests verify components; nothing verified they were plugged
+in. That gap produced the calibrated-mode bug — 99% coverage on
+`confidence.py`, every calibrator test green, and `main.py` never passing them
+to `execute()`.
+
+`tests/test_wiring.py` boots the *real* lifespan and asserts every
+`app.state.X` the request path reads is set. Then the more interesting half:
+**every setting must either be proven to change behaviour or be explicitly
+declared inert, with a reason.** Adding a knob now forces that decision instead
+of allowing silence.
+
+It found a dead one on its first run. `DEFAULT_MAX_TOKENS` and
+`DEFAULT_TEMPERATURE` were defined in `config.py`, documented in
+`.env.example` **and** in the table below ("When the request omits
+`max_tokens`") — and read by nothing. The real defaults were hardcoded in
+`schemas.py` and happened to match, so setting them did nothing and no test or
+doc check could tell. `check_docs.py` passed them because they *were*
+documented; documented and wired are different properties.
+
+Both are now applied via `_apply_sampling_defaults`, shared by
+`/v1/chat/completions` and `/route` — they must agree, because temperature and
+max_tokens are part of the cache key (invariant 5), so a preview computed from
+different defaults would lie about a hit.
+
+Fault-injected:
+
+    un-wire the sampling defaults          -> 2 failed
+    un-wire the calibrators (the real bug) -> 1 failed
+    lifespan forgets app.state.audit       -> 4 failed
+    /route stops applying defaults         -> 1 failed
+
+**One of my own tests was wrong, twice.** The `/route` version first asserted
+something true either way, and the fixtures attached to the developer's live
+Redis — so a cache hit from an earlier run served the request without calling
+the model. CI has no Redis and would have stayed green: red locally, green in
+CI, which is the worst arrangement. Both fixed; the fixtures now point at a
+closed port.
+
+707 unit tests (was 686), coverage 96%.
+
 ---
 
 ## Configuration surface
