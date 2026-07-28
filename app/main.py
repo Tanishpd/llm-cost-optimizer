@@ -20,7 +20,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from redis.asyncio import Redis
 
 from app.cache import guards
@@ -28,6 +28,7 @@ from app.cache.exact import CachedAnswer, ExactCache
 from app.cache.keys import build_key
 from app.cache.semantic import SemanticCache, SemanticHit
 from app.config import Settings, get_settings
+from app.dashboard import render as render_dashboard
 from app.costs import TokenUsage, compute_cost, micro_to_usd, price_micro_usd
 from app.providers.base import ProviderTimeout, ProviderUnavailable
 from app.providers.frontier import FrontierProvider
@@ -698,7 +699,7 @@ async def healthz(request: Request) -> Any:
         status=status,  # type: ignore[arg-type]
         dependencies=dependencies,
         config={
-            "milestone": "M5",
+            "milestone": "M7",
             "confidence_mode": settings.confidence_mode,
             "thresholds": {
                 "small": settings.threshold_for("small"),
@@ -756,6 +757,13 @@ async def route_only(body: ChatCompletionRequest, request: Request) -> RouteDeci
     )
 
 
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard() -> HTMLResponse:
+    """Self-contained live dashboard. Reads the same public endpoints any other
+    client would — there is no privileged dashboard API."""
+    return render_dashboard()
+
+
 @app.get("/metrics")
 async def metrics(request: Request) -> dict[str, Any]:
     """Aggregates for the dashboard. O(1) — counters, not a scan over the stream.
@@ -791,10 +799,10 @@ async def flush_cache(request: Request) -> dict[str, Any]:
 async def root() -> dict[str, Any]:
     return {
         "name": "llm-cost-optimizer",
-        "milestone": "M5 — full cascade with semantic cache",
+        "milestone": "M7 — full cascade, eval harness, live dashboard",
         "endpoints": [
-            "/v1/chat/completions", "/route", "/healthz", "/metrics", "/metrics/recent",
-            "/cache", "/docs",
+            "/v1/chat/completions", "/route", "/dashboard", "/healthz", "/metrics",
+            "/metrics/recent", "/cache", "/docs",
         ],
         "note": "exact cache -> semantic cache -> pre-router -> qwen2.5:0.5b -> [gate] "
         "-> qwen2.5:3b -> [gate] -> frontier. Eval harness and dashboard land in M6/M7.",
