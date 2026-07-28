@@ -20,9 +20,12 @@ That reduces to two questions, and the architecture is organized around keeping 
 | **Where should this prompt start?** | Pre-router — cheap heuristics over prompt shape | Before any model runs |
 | **Was that answer good enough?** | Confidence gate — the model's own token logprobs | After each model runs |
 
-The first is a guess and is allowed to be wrong. The second is evidence, and it's what makes the
-system correct despite the first being a guess: a bad entry decision costs latency, not quality,
-because the gates still catch a weak answer and escalate it.
+The first is a guess and is allowed to be wrong — in one direction. A *too-low* entry costs latency,
+not quality: the gates still catch a weak answer and escalate it. A *too-high* entry has no such
+safety net — `frontier` carries `gate=None`, so a router false-positive there is silent, ungated
+spend. That asymmetry drives two rules: frontier entry must be deliberately rare (no single feature,
+length included, should trigger it alone), and the eval reports a **false-expensive rate** — of the
+prompts the router would send straight to frontier, how many would a local gate have accepted?
 
 ## 2. Request lifecycle
 

@@ -64,7 +64,8 @@ frontier's)`, with `TARGET_SMALL=0.92` and `TARGET_LARGE=0.85` — the spec's 85
 the gate that actually spends money.
 
 **Why.** The brief says "escalate below 85% confidence." Raw `geo_mean` on a small model sits around
-0.5–0.75 *even when correct*, because language offers many valid phrasings. Shipping 0.85 against the
+an expected 0.5–0.75 *even when correct* (RESEARCH.md §3 — a prior, measured from M0 on), because
+language offers many valid phrasings. Shipping 0.85 against the
 raw metric would escalate nearly everything and look broken while being arithmetically correct.
 
 Rather than quietly retune the number and claim it's 85%, both modes exist explicitly. In calibrated
@@ -74,9 +75,10 @@ mode the 85% means what the brief intended.
 number and calling it 85% (dishonest). Dropping the threshold concept (loses the brief's intent).
 
 **Revisit.** Never collapse the two modes — the distinction is the point. And treat calibration as a
-claim requiring evidence: M6 must show held-out reliability (curve, Brier, ECE per gate) before the
-flip. A fitted model is not a calibrated one, and ~120 prompts is a small sample for a 7-feature fit.
-If reliability doesn't hold, staying in `raw` and reporting that is the correct outcome.
+claim requiring evidence: the flip is gated on the quantitative rule in PLAN M6 (per gate, pooled
+out-of-fold ECE ≤ 0.10 with bootstrap 95% CI upper bound < 0.20). A fitted model is not a calibrated
+one, and ~120 prompts is a small sample for a 7-feature fit. If reliability doesn't hold, staying in
+`raw` and reporting that is the correct outcome.
 
 ## D5 — One calibrator per gate, and the thresholds are not comparable
 
@@ -168,6 +170,12 @@ implement nothing behind it yet.
 first means training on hand-labeled guesses about what the models can handle — circular. Measure,
 then learn.
 
+**One rule the heuristic must respect: router errors are only cheap downward.** A too-low entry
+costs latency (the gates catch it); a too-high entry to `frontier` is ungated spend — no gate exists
+past that decision. So a heuristic is acceptable for choosing between local tiers, but frontier
+entry must require multiple concurring hardness signals (never length alone — summarization is long
+and cheap), and M6's **false-expensive rate** audits it.
+
 **Revisit.** After M6, when `eval/runs/` holds real per-tier outcomes.
 
 ## D11 — Real API for eval judging, mock for serving
@@ -210,7 +218,7 @@ Inventing a number would make the headline figure look more rigorous while being
 **A second assumption rides along and must be disclosed with it:** the baseline charges frontier
 prices for *every* request, cache hits included. It answers "what would this traffic have cost with no
 gateway at all" — the right question — but it does credit cache hits at full frontier price. Both
-assumptions are stated in README.md's "How savings are counted", not left for a reader to infer.
+assumptions are disclosed in README.md's "How savings are counted".
 
 **Revisit if.** Deployed somewhere with metered compute, where per-request local cost is a real number
 rather than an estimate.

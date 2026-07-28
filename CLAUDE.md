@@ -77,7 +77,8 @@ everything. Use `geo_mean = exp(mean(logprob_i))`, which is length-invariant (= 
 derivation in RESEARCH.md §3.
 
 **The 85% threshold.** The spec says "escalate below 85% confidence." Raw `geo_mean` on a small model
-sits around 0.5–0.75 *even when correct*, because of normal lexical freedom. Shipping `0.85` against
+sits around an expected 0.5–0.75 *even when correct* (a prior, not yet measured here — RESEARCH.md
+§3), because of normal lexical freedom. Shipping `0.85` against
 the raw metric escalates nearly everything and looks broken. Two modes exist for this reason:
 `CONFIDENCE_MODE=raw` (thresholds 0.55 / 0.62 on `geo_mean`) until `eval/run_eval.py` fits the
 calibrators, then `CONFIDENCE_MODE=calibrated` where 0.85 genuinely means "85% chance this tier's
@@ -104,7 +105,8 @@ number, on the gate that actually spends. **Gate 1's bar is higher than gate 2's
 executor walks it from the router's entry point. Adding or reordering a tier is a data change. Never
 reintroduce nested if/else routing — that's what the ordering exists to prevent.
 
-**Ollama logprobs.** Confirmed supported (v0.12.11+; installed client is 0.30.10). Request
+**Ollama logprobs.** Confirmed in the Ollama source (v0.12.11+; installed client is 0.30.10) but
+not yet observed on this machine — M0 verifies it before anything is built on it. Request
 `"logprobs": true, "top_logprobs": 5` with **`"stream": false`** — the non-streaming path accumulates
 all chunks' logprobs into the final response, which is what the gate needs. `top_logprobs` must be
 0–20 or the server 400s. GitHub issue #16117 is closed "not planned" and looks like a denial — the
@@ -167,7 +169,8 @@ every judgment call toward missing.
 
 ## Cost of running eval
 
-`eval/run_eval.py` with `EVAL_USE_REAL_FRONTIER=true` spends real money (~120 prompts × 2 calls).
+`eval/run_eval.py` with `EVAL_USE_REAL_FRONTIER=true` spends real money (~120 prompts × 3 calls
+≈ 360 — 1 reference completion + 1 judge call per local tier).
 Every API response is cached to `eval/runs/*.json`; **always reuse that cache when re-fitting
 calibrators.** Never re-spend to recompute something already on disk, and never enable the real
 frontier for serving — only eval.

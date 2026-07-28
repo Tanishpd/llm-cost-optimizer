@@ -140,8 +140,10 @@ errors. The gateway's product is the visibility into its decisions.
 | `latency_ms.total` | float | Wall-clock. Exceeds the sum of the stage keys by a small amount of gateway overhead — do not assert exact equality. |
 | `cache.*` | object | Which tiers were consulted, similarity score, and which guard rejected a near-hit. |
 | `latency_ms` | object | Per stage plus `total`. Keys present only for stages that ran. |
+| `tokens_in` | int | Prompt tokens, counted **once** per request — not once per attempted tier. |
+| `tokens_out` | int | The **serving** tier's completion tokens. Discarded intermediate completions (e.g. the 94 tokens the small tier emitted before gate 1 escalated) appear in `gates[].metrics.n_tokens` and in `/metrics` throughput, not here. |
 | `cost_usd` | float | Actual spend. `0.0` for cache and local tiers. |
-| `baseline_cost_usd` | float | What an all-frontier policy would have spent on this request. |
+| `baseline_cost_usd` | float | What an all-frontier policy would have spent on this request: `tokens_in` + `tokens_out` at frontier prices. |
 | `cost_saved_usd` | float | `baseline_cost_usd − cost_usd`. The headline number, summed on the dashboard. |
 | `degraded` | array | Non-fatal dependency failures, e.g. `["redis_unavailable"]`. Empty when healthy. |
 
@@ -171,8 +173,10 @@ replaced. Deferred in PLAN.md with the resolution sketched (buffer locally, stre
 
 ## POST /route
 
-Runs the pre-router and returns the decision **without calling any model**. Free and instant — useful
-for testing routing policy and for building a labeled dataset.
+Runs the pre-router and cache lookups **without calling any chat model** — no generation cost.
+Useful for testing routing policy and for building a labeled dataset. One caveat: computing
+`cache_preview.semantic_hit` costs an embedding call (~20 ms) when the exact cache misses; when the
+semantic check doesn't run, `semantic_hit` and `similarity` are `null`, not `false`.
 
 Request: same shape as `/v1/chat/completions` (only `messages` is read).
 
@@ -211,15 +215,17 @@ Request: same shape as `/v1/chat/completions` (only `messages` is read).
             "entries": 867},
   "gates": {"small": {"evaluated": 690, "accepted": 511, "escalated": 179, "escalation_rate": 0.259},
             "large": {"evaluated": 239, "accepted": 198, "escalated": 41, "escalation_rate": 0.172}},
-  "cost": {"actual_usd": 0.0859, "baseline_usd": 1.4194,
-           "saved_usd": 1.3335, "saved_pct": 94.0},
+  "cost": {"actual_usd": 0.0859, "baseline_usd": 1.7057,
+           "saved_usd": 1.6198, "saved_pct": 95.0},
   "latency_ms": {"cache_exact": {"p50": 1.1, "p95": 2.4},
                  "cache_semantic": {"p50": 17.8, "p95": 31.2},
                  "local_small": {"p50": 116.0, "p95": 189.0},
                  "local_large": {"p50": 438.0, "p95": 702.0},
                  "frontier": {"p50": 1980.0, "p95": 3110.0},
                  "end_to_end": {"p50": 121.0, "p95": 1840.0}},
-  "tokens": {"in": 48211, "out": 129884, "frontier_in": 3104, "frontier_out": 7812},
+  "tokens": {"in": 48211, "out": 129884,
+             "baseline_in": 61430, "baseline_out": 155210,
+             "frontier_in": 3104, "frontier_out": 7812},
   "model_loads": {"cold_loads": 7, "mean_load_ms": 1420.0},
   "degraded": []
 }
@@ -229,8 +235,15 @@ Request: same shape as `/v1/chat/completions` (only `messages` is read).
 (`OLLAMA_MAX_LOADED_MODELS=2` means occasional evictions) doesn't silently pollute the latency
 percentiles.
 
-`tokens.in`/`out` are totals across every tier attempted; `frontier_in`/`frontier_out` is the subset
-that was actually billed. Both are needed — the first drives the baseline, the second the actual spend.
+Three token accumulators, three distinct jobs — do not conflate them:
+
+- `tokens.in`/`out` — **throughput** totals across every tier attempted (a cascaded request counts
+  its prompt once per attempt, and every intermediate completion). Load/latency analysis only;
+  **excluded from all cost formulas.**
+- `tokens.baseline_in`/`baseline_out` — the **baseline** accumulators: per request, prompt tokens
+  counted **once** plus the *serving* tier's completion tokens, **cache hits included** (a cache hit
+  contributes the incoming prompt's token count and the cached entry's stored completion count).
+- `tokens.frontier_in`/`frontier_out` — the subset actually **billed**; drives actual spend.
 
 The counts must reconcile, and a test should assert it:
 
@@ -240,21 +253,23 @@ router.entry.local_small                          == tiers.attempted.local_small
 router.entry.local_large + gates.small.escalated  == tiers.attempted.local_large
 router.entry.frontier    + gates.large.escalated  == tiers.attempted.frontier
 gates.X.accepted         + gates.X.escalated      == gates.X.evaluated
-cost.actual_usd   == frontier_in/1e6 × PRICE_IN + frontier_out/1e6 × PRICE_OUT
-cost.baseline_usd == tokens.in/1e6   × PRICE_IN + tokens.out/1e6   × PRICE_OUT
+cost.actual_usd   == frontier_in/1e6   × PRICE_IN + frontier_out/1e6   × PRICE_OUT
+cost.baseline_usd == baseline_in/1e6   × PRICE_IN + baseline_out/1e6   × PRICE_OUT
+cost.baseline_usd == Σ per-request x_hlr.baseline_cost_usd
 cost.baseline_usd − cost.actual_usd               == cost.saved_usd
 ```
 
 Against the example, at `PRICE_IN=2.50` / `PRICE_OUT=10.00` per 1M:
 served sums to 1284 ✓; 60 + 179 = 239 ✓; 15 + 41 = 56 ✓;
 actual = 3104/1e6×2.50 + 7812/1e6×10.00 = 0.0859 ✓;
-baseline = 48211/1e6×2.50 + 129884/1e6×10.00 = 1.4194 ✓;
-1.4194 − 0.0859 = 1.3335 ✓, and 1.3335 / 1.4194 = 94.0% ✓.
+baseline = 61430/1e6×2.50 + 155210/1e6×10.00 = 1.7057 ✓;
+1.7057 − 0.0859 = 1.6198 ✓, and 1.6198 / 1.7057 = 95.0% ✓.
+(`tokens.in`/`out` appear in no identity — deliberately.)
 
 Note what the baseline assumes: that **every** request, cache hits included, would otherwise have gone
 to the frontier. That's the "what would this traffic cost with no gateway" question, which is the
-useful one — but it does mean cache hits are credited at full frontier price. Stated plainly in the
-README rather than left for a reader to discover.
+useful one — but it does mean cache hits are credited at full frontier price (see README, "How
+savings are counted", and D13).
 
 ---
 
@@ -350,15 +365,19 @@ The failure rate exists to exercise the degradation paths in M8.
 ## Cost math
 
 ```
-cost_usd          = (tokens_in/1e6 × FRONTIER_PRICE_IN) + (tokens_out/1e6 × FRONTIER_PRICE_OUT)
-                    for the frontier tier; 0 for cache and local tiers
-baseline_cost_usd = the same formula applied to every request, as if it had gone straight to frontier
+cost_usd          = (frontier tokens billed):  in/1e6 × FRONTIER_PRICE_IN + out/1e6 × FRONTIER_PRICE_OUT
+                    0 for cache and local tiers
+baseline_cost_usd = tokens_in/1e6 × FRONTIER_PRICE_IN + tokens_out/1e6 × FRONTIER_PRICE_OUT
+                    (prompt once + serving tier's completion, at frontier prices — every request,
+                     cache hits included, as if no gateway existed)
 cost_saved_usd    = baseline_cost_usd − cost_usd
 ```
 
+Worked check against the `x_hlr` example: 41/1e6×2.50 + 156/1e6×10.00 = 0.0016625 → `0.00166` ✓.
+
 Local tiers are counted as `$0` marginal. That is a deliberate simplification — electricity and
 amortized hardware are real but not meaningfully attributable per request, and inventing a number
-would make the headline savings figure less honest, not more. The README states this openly.
+would make the headline savings figure less honest, not more (see D13).
 
 Accumulate in integer micro-USD or `Decimal`, never float (see CLAUDE.md conventions) — float
 accumulation over thousands of requests visibly drifts.

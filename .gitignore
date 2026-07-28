@@ -15,7 +15,9 @@ venv/
 
 # Eval artifacts: cached API responses may contain prompt/response text,
 # and re-running costs money. Keep the fitted calibrator, drop the raw runs.
-eval/runs/
+# (Must be `/*`, not the bare directory: git never descends into an excluded
+# directory, which would make the .gitkeep negation inert.)
+eval/runs/*
 !eval/runs/.gitkeep
 
 # Local state
