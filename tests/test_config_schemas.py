@@ -242,3 +242,17 @@ def test_response_ids_are_unique():
         hlr=HlrMetadata(trace_id="t", tier=None),
     )
     assert a.id != b.id and a.id.startswith("chatcmpl-")
+
+
+def test_project_root_is_importable_without_module_invocation():
+    """The suite must work under bare `pytest`, not only `python -m pytest`.
+
+    Only the `-m` form puts the CWD on sys.path, so without `pythonpath` in
+    pyproject the whole suite fails to collect under CI and most editors —
+    which is exactly what happened on this project's first CI run.
+    """
+    import tomllib
+    from pathlib import Path
+
+    cfg = tomllib.loads((Path(__file__).resolve().parent.parent / "pyproject.toml").read_text())
+    assert "." in cfg["tool"]["pytest"]["ini_options"]["pythonpath"]

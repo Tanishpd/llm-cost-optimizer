@@ -66,6 +66,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
+          cache: pip
+
+      # check_docs.py imports app.config to compare settings against the docs,
+      # so it needs the runtime dependencies — not just a bare checkout.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       # This doc set has drifted twice in exactly these ways, so the checks
       # that caught it by hand now run automatically.
