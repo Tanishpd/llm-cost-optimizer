@@ -420,6 +420,82 @@ the deltas concatenate back to the source across unicode, code fences and
 mixed whitespace, because a chunker that quietly eats a newline looks fine in
 a terminal and is broken in rendered markdown.
 
+### M12 — Tenancy, budgets, and a durable audit trail ✅ DONE (2026-07-28)
+
+The last two entries under "deliberately deferred", and the two that most
+changed what this *is*. Before them the gateway could tell you what a request
+cost but not who owed for it, and the record of that decision was gone within
+10k requests.
+
+**Tenancy (`app/budgets.py`).** A key was a credential; now it can belong to an
+account with a daily USD cap. `TENANTS` is JSON rather than a delimited string
+because API keys may contain `:` or `=`, and mis-splitting one fails
+*silently* — the key still authenticates while the spend lands on the wrong
+tenant (D22).
+
+Over budget **degrades rather than rejects** (D23): the frontier drops out of
+the cascade and the local tiers carry on. This is one line —
+`[t for t in tiers if not t.billed]` — because `app/cascade.py` is ordered data
+(D14). Had the cascade been nested if/else it would have been a new branch
+through every path. Measured against two configured tenants:
+
+    acme, $0.0005/day cap
+      request 1  frontier      spent $0.000313  remaining $0.000187
+      request 3  frontier      spent $0.000628  OVER
+      request 4  local_large   degraded=['budget_exhausted:acme']
+                               reason="daily budget exhausted: $0.000628 of
+                               $0.000500 spent today (UTC); frontier tier
+                               withheld, so: served by local_large..."
+      pinned frontier while over  -> HTTP 402
+    globex, $5.00/day cap
+      unaffected throughout      spent $0.000208  remaining $4.999792
+
+Two caveats are stated in the docs rather than glossed, and `check_docs.py` now
+enforces that they stay stated. The cap is **approximate by exactly one
+request** — cost is not knowable until the provider replies, so it is checked
+before and recorded after; the overshoot is bounded by `MAX_OUTPUT_TOKENS x
+FRONTIER_PRICE_OUT` (~$0.04 at the defaults, logged at startup, asserted by a
+test). And **Redis down means budgets are not enforced** — failing closed would
+turn a cache blip into a total frontier outage, so it fails open and says so in
+four places (D24, D25).
+
+**Audit trail (`app/audit.py`).** Append-only JSONL, one line per request,
+durable across restarts — which the capped telemetry stream never was. They
+answer different questions and the docs are now checked for keeping them apart
+(D26).
+
+Writes never touch the request path: records go on a queue, a background task
+batches them and writes in a worker thread. A full queue **drops** rather than
+blocking, and counts every drop, because an audit trail with unreported holes
+invites conclusions drawn from absence. One file per worker PID, because a line
+carrying `reason` + `gates` + metrics can exceed `PIPE_BUF`, above which
+concurrent `O_APPEND` is no longer atomic.
+
+**Refusals are audited too.** Telemetry counts served traffic only, which is
+right for a rate aggregate and wrong for a record of what the gateway decided —
+a 402 *is* a spend decision. This gap surfaced while reconciling the audit file
+against `/metrics` and finding 5 against 6; the discrepancy turned out to be an
+all-time Redis counter versus a freshly-deleted file, but looking for it
+exposed the real hole.
+
+    5 requests audited, tenants ['acme','globex'], raw key present: False
+
+**CI found a real bug in the shutdown path**, on 3.14 only, as a flaky rotation
+test. The writer pulls a batch off the queue and then awaits a thread to write
+it; `stop()` cancelled that task. But `asyncio.to_thread` cannot cancel a
+*running* thread — so cancelling there either lost the batch (thread not yet
+started; it was no longer in the queue, so the shutdown flush could not recover
+it) or duplicated it (thread already running, completed anyway, then the
+cancel handler wrote it again). Both were reproduced deterministically by
+making the write slow.
+
+Shutdown now **signals** with a queued sentinel and waits for the writer to
+acknowledge; cancellation is the backstop for a wedged disk, not the mechanism.
+A `_closing` flag covers the case where the queue was full and the sentinel
+could not be enqueued — without it the writer drained everything and then
+blocked on `get()` until the timeout fired, a 5-second stall on exit under
+exactly the sustained load that filled the queue.
+
 ---
 
 ## Configuration surface
@@ -459,6 +535,14 @@ a terminal and is broken in rendered markdown.
 | `SEMANTIC_THRESHOLD` | `0.95` | Cosine floor; conservative on purpose |
 | `SEMANTIC_MAX_CHARS` | `500` | Above this, skip semantic caching |
 | `STREAM_CHUNK_CHARS` | `24` | Characters per SSE content frame. Trades frame smoothness against ~200 bytes of envelope each; `0` sends one frame |
+| `TENANTS` | `{}` | JSON: `{"acme": {"keys": [...], "daily_budget_usd": "5.00"}}`. JSON rather than a delimited string because API keys may contain `:` or `=` |
+| `DEFAULT_DAILY_BUDGET_USD` | `0` | Cap for the implicit `default` and `anonymous` tenants. 0 = unlimited |
+| `AUDIT_ENABLED` | `true` | Durable JSONL record of every routing decision, refusals included |
+| `AUDIT_PATH` | `audit` | Directory. One file per worker PID — a line can exceed `PIPE_BUF`, above which concurrent `O_APPEND` is not atomic |
+| `AUDIT_MAX_BYTES` | `52428800` | Rotate at 50 MB. Granularity is the batch, so a file may exceed this by up to one batch |
+| `AUDIT_KEEP_FILES` | `5` | Rotated siblings retained; older are deleted |
+| `AUDIT_QUEUE_SIZE` | `10000` | Full queue drops rather than blocking the request path. Drops are counted in `/healthz` |
+| `AUDIT_FSYNC` | `false` | Per-record fsync. Off: a per-batch flush survives a process crash, which is the common failure |
 | `CONFIDENCE_MODE` | `raw` | `raw` \| `calibrated` |
 | `CALIBRATOR_PATH` | `eval/calibrator.json` | Read once at startup. Absent is fine in `raw`; absent in `calibrated` refuses to start rather than silently serving raw thresholds under a calibrated label |
 | `THRESHOLD_SMALL` | `0.55` | Gate 1, `geo_mean`, raw mode. **Not comparable to `THRESHOLD_LARGE`** — different model, different distribution |
@@ -617,9 +701,9 @@ python3 scripts/demo.py
 - **A third local tier / 7B model.** RAM-blocked, not a design choice. Revisit on different hardware.
 - ~~**Auth and rate limiting.**~~ **Done in M9/M10** — per-key auth, request bounds, and a
   Redis-backed sliding window shared across workers.
-- **Multi-tenancy.** Still deferred, and now the more interesting gap: a key is a credential, not an
-  account, so every key draws on the same frontier spend. The seam is `ApiKeyAuth.principal_for`,
-  which already resolves a stable per-key digest.
+- ~~**Multi-tenancy.**~~ **Done in M12** — named accounts with daily USD caps, per-tenant
+  attribution in `/metrics`, and degradation to local tiers rather than refusal when a cap binds.
+  Still deferred within it: per-tenant *rate* limits and model allow-lists. Tenancy covers spend.
 - ~~**Multi-worker uvicorn.**~~ **Done in M10** and verified with 4 real worker processes: the
   rate limiter moved to a Redis sorted set (it was the one genuinely broken piece — per-process
   windows meant a 60/min cap silently became 60N), and the semantic replica's version counter was

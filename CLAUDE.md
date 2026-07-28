@@ -170,6 +170,8 @@ every judgment call toward missing.
 | Cache behaviour | `app/cache/{keys,exact,semantic}.py` |
 | Response shape | `app/schemas.py` |
 | SSE framing | `app/streaming.py` — pure; takes a finished response, yields frames |
+| Tenants, spend caps | `app/budgets.py` — a tenant is an account, a key is a credential |
+| Durable request record | `app/audit.py` — JSONL; never blocks the loop, counts its drops |
 | Metrics / dashboard | `app/telemetry.py`, `app/dashboard.py`, `static/dashboard.html` |
 | Recalibrate the thresholds | `eval/run_eval.py` → writes `eval/calibrator.json` |
 | Auth, request size bounds | `app/security.py` (+ `PUBLIC_PATHS` if adding an unauthenticated route) |
@@ -258,9 +260,10 @@ which is worse than shared but far better than none.
 
 ## Current state
 
-**M0–M11 complete (2026-07-28).** The gateway runs and is hardened: all five tiers, both gates, eval
+**M0–M12 complete (2026-07-28).** The gateway runs and is hardened: all five tiers, both gates, eval
 harness, dashboard, auth, shared rate limiting, circuit breakers, structured logging, container
-image, streaming. **635 unit + 9 integration tests**, 107 doc-consistency checks. `python3 scripts/demo.py`
+image, streaming, per-tenant budgets, a durable audit trail. **686 unit + 10 integration
+tests**, 123 doc-consistency checks. `python3 scripts/demo.py`
 walks every tier.
 
 **Shipping in `raw` confidence mode, not `calibrated`** — M6 fitted both calibrators and gate
@@ -276,10 +279,12 @@ Measured, and now recorded in RESEARCH.md §3.1–3.2:
   and the gate accepted it at the 0.55 default — a demonstrated false-cheap. Read §3.2 before
   touching the gating logic; it constrains what any single-statistic threshold can achieve.
 
-**Nothing is queued.** Deliberately not built, and each is a real gap rather than an oversight:
-a real-frontier calibration run (needs a key and a few dollars), per-tenant
-budgets (auth is per-key but every key draws on the same spend), and a durable audit trail
-(telemetry is a capped stream).
+**One thing is queued:** a real-frontier calibration run, deferred by choice — it needs an API key
+and a few dollars, and M6's negative result stands until it happens.
+
+Still deliberately not built: per-tenant *rate* limits and model allow-lists (tenancy covers spend
+only), and shipping the audit trail off-host (it is durable and local; JSONL is already the format a
+shipper wants).
 
 Before changing anything, run `.venv/bin/python scripts/check_docs.py` — it enforces the
 cross-document invariants below, and it has caught drift four times.

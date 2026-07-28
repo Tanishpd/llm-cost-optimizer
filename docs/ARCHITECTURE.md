@@ -68,6 +68,11 @@ prompts the router would send straight to frontier, how many would a local gate 
         └────────┬────────┘
                  │
                  ▼
+        ┌─────────────────┐  over cap → drop the billed tier from the list.
+        │ budgets.check   │  Free unless a cap is configured.
+        └────────┬────────┘
+                 │
+                 ▼
         ┌─────────────────────────────────────────────────────────┐
         │  cascade.py executor — walks the tier list from `entry` │
         └────────┬────────────────────────────────────────────────┘
@@ -87,7 +92,7 @@ prompts the router would send straight to frontier, how many would a local gate 
         │ T3 frontier     ├──────────────────────────────▶ RETURN
         └─────────────────┘
 
-  every RETURN → write-through to cache → telemetry record → x_hlr assembled
+  every RETURN → write-through to cache → telemetry + audit → x_hlr assembled
 ```
 
 Two properties worth naming:
@@ -118,6 +123,8 @@ Two properties worth naming:
 | `cache/exact.py` | T0 get/set/TTL | Embeddings |
 | `cache/semantic.py` | T1 index, cosine, guards | Which model answers |
 | `streaming.py` | SSE framing of a finished response (pure) | Tiers, gates, why it was buffered |
+| `budgets.py` | Tenant resolution, spend caps, the ledger | Auth, HTTP, the cascade |
+| `audit.py` | Durable JSONL record + rotation | What a request *is* |
 | `costs.py` | Token → USD (pure) | Who called it |
 | `telemetry.py` | Records and aggregates | Business logic |
 | `security.py` | Key auth, request bounds, public paths | Redis, tiers |
@@ -298,13 +305,14 @@ Each is a place the design expects to change, with the interface already drawn:
   than a pause ([D8](DECISIONS.md)).
 - **Worker count is capped by RAM, not by design.** Each worker holds its own numpy replica and
   HTTP pool; on 8 GB, 2–4 is the practical ceiling.
-- **No tenancy.** Auth and rate limiting exist and are per-*key*, but a key is a credential, not an
-  account: there are no per-tenant budgets, quotas, or cost attribution. Every key draws on the same
-  frontier spend. Adding tenancy means a principal→budget map consulted before the frontier tier —
-  the seam is `ApiKeyAuth.principal_for`, which already resolves a stable digest per key.
-- **No persistent audit log.** Telemetry is a capped Redis stream (`MAXLEN ~ 10000`); old records are
-  dropped, not archived. Fine for a dashboard, not sufficient if the routing decisions ever need to
-  be reconstructed after the fact.
+- **No per-tenant rate limits or model allow-lists.** Tenancy exists and covers *spend* — named
+  accounts, daily caps, per-tenant attribution ([D22](DECISIONS.md)) — but rate limiting is still per
+  *key*, and every tenant may reach every tier. Adding either means extending `Tenant`, which the
+  config shape (JSON) already accommodates.
+- **The audit trail is local, not shipped.** JSONL on disk, rotated, one file per worker
+  ([D26](DECISIONS.md)). Durable across restarts, which the capped telemetry stream never was — but
+  it does not survive the host, and there is no cross-worker query. Both are shipper problems, and
+  JSONL is already the format a shipper wants.
 - **No local-inference cost model.** Local tiers book $0. Electricity and amortized hardware are real
   but not meaningfully attributable per request, and a made-up number would look more rigorous while
   being less honest ([D13](DECISIONS.md#d13--local-inference-counted-as-0)).

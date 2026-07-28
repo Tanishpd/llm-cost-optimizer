@@ -27,6 +27,8 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from redis.asyncio import Redis
 
+from app.audit import AuditLog, audit_entry
+from app.budgets import BudgetLedger, TenantRegistry, max_overshoot_micro
 from app.cache import guards
 from app.cache.exact import CachedAnswer, ExactCache
 from app.cache.keys import build_key
@@ -46,6 +48,7 @@ from app.ratelimit import RedisRateLimiter
 from app.resilience import BreakerRegistry, RetryPolicy
 from app.router.policy import decide
 from app.schemas import (
+    BudgetRecord,
     CacheRecord,
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -115,7 +118,17 @@ async def lifespan(app: FastAPI):
         attempts=settings.retry_attempts,
         base_delay_s=settings.retry_base_delay_s,
     )
-    app.state.auth = ApiKeyAuth(settings.api_key_set, require_auth=settings.require_auth)
+    # Tenancy: who pays. Built before auth because auth needs its resolver.
+    app.state.tenants = TenantRegistry(
+        settings.tenant_list(),
+        default_daily_budget_usd=settings.default_daily_budget_usd,
+    )
+    app.state.budgets = BudgetLedger(redis, app.state.tenants)
+    app.state.auth = ApiKeyAuth(
+        settings.api_key_set,
+        require_auth=settings.require_auth,
+        tenant_for=lambda key: app.state.tenants.resolve(key).name,
+    )
     # Redis-backed so every worker shares one window. Falls back to
     # per-process state if Redis is unreachable — a limit that multiplies by
     # worker count still beats no limit at all.
@@ -143,6 +156,23 @@ async def lifespan(app: FastAPI):
             "AUTH DISABLED: no GATEWAY_API_KEYS set. Anyone who can reach this port can "
             "spend the frontier budget. Only bind to loopback in this mode."
         )
+
+    configured = app.state.tenants.configured
+    if configured:
+        overshoot = micro_to_usd(max_overshoot_micro(
+            settings.max_output_tokens, settings.frontier_price_out))
+        logger.info(
+            "tenants: %s | budgets are checked before the call and recorded after, "
+            "so a tenant can exceed their cap by at most one request (<= $%s)",
+            ", ".join(f"{t.name}=${t.daily_budget_usd}/day" if not t.unlimited
+                      else f"{t.name}=unlimited" for t in configured),
+            overshoot,
+        )
+        if redis is None:
+            logger.warning(
+                "BUDGETS NOT ENFORCED: Redis is unreachable, so per-tenant caps cannot be "
+                "read or recorded. Frontier spend is uncapped until Redis returns."
+            )
 
     # Calibrators: read once, here, so the request path stays I/O-free and a
     # malformed fit fails at startup rather than on the first gate. Absent is
@@ -175,6 +205,18 @@ async def lifespan(app: FastAPI):
         api_key=settings.frontier_api_key.get_secret_value(),
         timeout_s=settings.frontier_timeout_s,
     )
+
+    # Durable audit trail. Started here rather than lazily so a permission
+    # problem surfaces at boot, not on the first request that needed auditing.
+    app.state.audit = AuditLog(
+        settings.audit_path,
+        enabled=settings.audit_enabled,
+        max_bytes=settings.audit_max_bytes,
+        keep_files=settings.audit_keep_files,
+        queue_size=settings.audit_queue_size,
+        fsync=settings.audit_fsync,
+    )
+    await app.state.audit.start()
 
     # Load the warm replica once at startup rather than on the first request.
     synced = await app.state.semantic_cache.sync(force=True)
@@ -209,6 +251,10 @@ async def lifespan(app: FastAPI):
         janitor.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await janitor
+        # Before the client and Redis: draining writes records that were
+        # already accepted, and losing them at shutdown is exactly the failure
+        # a durable trail exists to prevent.
+        await app.state.audit.stop()
         await client.aclose()
         if redis is not None:
             await redis.aclose()
@@ -305,6 +351,8 @@ async def enforce_access(request: Request, call_next):
         )
 
     request.state.principal = principal
+    # Who pays. Resolved during auth so the raw key never reaches here.
+    request.state.tenant = result.tenant
     response = await call_next(request)
     if remaining >= 0:
         response.headers["X-RateLimit-Remaining"] = str(remaining)
@@ -346,6 +394,24 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
     latency: dict[str, float] = {}
     degraded: list[str] = []
 
+    # ---- budget ----------------------------------------------------------
+    # Resolved up front so a cache hit reports the tenant too, and because the
+    # answer depends only on who is calling. Costs nothing unless a cap is
+    # configured: `check()` returns without touching Redis for an unlimited
+    # tenant, which is the shipped default.
+    #
+    # Degrade rather than reject: a tenant past their cap keeps getting local
+    # answers. On a gateway whose thesis is "most prompts don't need the
+    # expensive model", refusing service when the expensive model is
+    # unaffordable would be exactly the wrong instinct.
+    tenant_name = getattr(request.state, "tenant", "anonymous")
+    verdict = await request.app.state.budgets.check(tenant_name)
+    budget_record = BudgetRecord(**verdict.as_dict())
+    if verdict.unavailable and verdict.limit_micro > 0:
+        degraded.append("budget_unavailable")
+    if not verdict.allowed:
+        degraded.append(f"budget_exhausted:{verdict.tenant}")
+
     limits: RequestLimits = request.app.state.limits
     total_chars = sum(len(m.content) for m in body.messages)
     violation = limits.check(messages=body.messages, total_chars=total_chars)
@@ -353,6 +419,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
         return _error(
             status=413, code=violation.code, error_type="invalid_request_error",
             message=violation.message, trace_id=trace_id, degraded=degraded, started=started,
+            request=request, tenant=getattr(request.state, "tenant", "anonymous"),
         )
 
     # Clamp rather than reject: a caller asking for more than the cap almost
@@ -419,6 +486,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
             return await _serve_cached(
                 request,
                 body=body,
+                budget=budget_record,
                 hit=hit,
                 tier="cache_exact",
                 reason=f"exact cache hit; answer originally from {hit.tier} ({hit.model})",
@@ -487,6 +555,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
                             return await _serve_cached(
                                 request,
                                 body=body,
+                                budget=budget_record,
                                 hit=stored,
                                 tier="cache_semantic",
                                 reason=(
@@ -526,6 +595,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
                     return await _serve_cached(
                         request,
                         body=body,
+                        budget=budget_record,
                         hit=shared,
                         tier="cache_exact",
                         reason=(
@@ -574,8 +644,38 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
             max_tokens=body.max_tokens,
         )
 
-    # A forced tier pins the walk to exactly that rung: no gate, no escalation.
-    # The escape hatch exists to benchmark one tier in isolation.
+    # Over budget removes the frontier from the walk. The cascade is ordered
+    # data, so "you may not escalate to the frontier" is a list filter rather
+    # than a branch.
+    if not verdict.allowed:
+        # A pinned tier means "this rung or nothing" — it exists to benchmark
+        # one tier in isolation, so silently substituting a cheaper one would
+        # answer a different question than the caller asked. This is the only
+        # case where a budget produces an error rather than a cheaper answer,
+        # and it takes the caller removing the fallback themselves.
+        if body.forced_tier == "frontier":
+            latency["total"] = round((time.perf_counter() - started) * 1000, 1)
+            return _error(
+                status=402,
+                code="budget_exhausted",
+                error_type="budget_error",
+                message=(
+                    f"{verdict.reason}. The frontier tier was pinned explicitly via "
+                    "`model`, so there is no cheaper tier to fall back to. Drop the pin "
+                    "to be served locally instead."
+                ),
+                trace_id=trace_id,
+                degraded=degraded,
+                started=started,
+                request=request,
+                tenant=verdict.tenant,
+            )
+        tiers = [t for t in tiers if not t.billed]
+        # The router may have chosen `frontier`; `entry_index` returns 0 for a
+        # tier that is no longer in the list, which is the degradation we want.
+        if tier == "frontier":
+            tier = tiers[0].name
+
     start = entry_index(tiers, tier)
     walk = tiers[start : start + 1] if body.forced_tier else tiers
 
@@ -615,6 +715,8 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
             degraded=degraded,
             started=started,
             path=list(outcome.path),
+            request=request,
+            tenant=verdict.tenant,
         )
 
     completion = outcome.completion
@@ -628,6 +730,12 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
         price_in_per_m=settings.frontier_price_in,
         price_out_per_m=settings.frontier_price_out,
     )
+
+    # Record the spend *after* the call, because the cost is not knowable until
+    # the provider replies. That is what bounds a tenant's overshoot to one
+    # request; `budgets.max_overshoot_micro` puts a number on it.
+    if cost.cost_micro_usd > 0:
+        await request.app.state.budgets.record(verdict.tenant, cost.cost_micro_usd)
 
     # ---- write-through --------------------------------------------------
     # Every served answer is cached, so the next identical request is a T0 hit.
@@ -685,15 +793,21 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
         gates=gate_records,
         confidence=outcome.confidence,
         confidence_mode=settings.confidence_mode,
-        reason=outcome.reason,
+        reason=budget_reason(outcome.reason, verdict),
         router=router_record,
         cache=cache_record,
         latency_ms=latency,
+        # Re-read after recording, so `remaining` reflects this request rather
+        # than the state before it. Cheap: one GET, and only when a cap exists.
+        budget=BudgetRecord(**(
+            await request.app.state.budgets.check(verdict.tenant)
+        ).as_dict()),
         degraded=degraded,
         **cost.as_dict(),
     )
 
-    await _telemetry(request).record(
+    await _record(
+        request,
         RequestRecord(
             trace_id=trace_id,
             tier=tier,
@@ -715,7 +829,9 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
             cold_load_ms=completion.load_ms if completion.was_cold_load else 0.0,
             degraded=degraded,
             created_at=time.time(),
-        )
+        ),
+        tenant=verdict.tenant,
+        model=completion.model,
     )
 
     response = ChatCompletionResponse.build(
@@ -731,6 +847,40 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
         "X-HLR-Cost-Usd": f"{hlr.cost_usd:.6f}",
         "X-HLR-Saved-Usd": f"{hlr.cost_saved_usd:.6f}",
     })
+
+
+async def _record(
+    request: Request, rec: RequestRecord, *, tenant: str, model: str | None
+) -> None:
+    """Write one request to telemetry *and* to the durable audit trail.
+
+    A single call site for both, so the live dashboard and the on-disk record
+    can never disagree about what happened. Neither can fail the request:
+    telemetry swallows its own errors, and the audit write is a non-blocking
+    queue put.
+    """
+    await _telemetry(request).record(rec)
+    request.app.state.audit.write(audit_entry(
+        rec,
+        tenant=tenant,
+        model=model,
+        principal=getattr(request.state, "principal", None),
+    ))
+
+
+def budget_reason(reason: str, verdict) -> str:
+    """Prepend the budget's fingerprint to the routing reason when it changed
+    the route.
+
+    Invariant 2 says `reason` is human-readable prose, and invariant 1 says the
+    metadata must explain the decision. A request that was kept off the
+    frontier by a spend cap took a different path than the gates alone would
+    have chosen, so the reason has to say so — otherwise the answer looks like
+    a routine local hit.
+    """
+    if verdict.allowed:
+        return reason
+    return f"{verdict.reason}; frontier tier withheld, so: {reason}"
 
 
 def _respond(
@@ -773,6 +923,7 @@ async def _serve_cached(
     *,
     body: ChatCompletionRequest,
     hit: CachedAnswer,
+    budget: BudgetRecord | None = None,
     tier: str,
     reason: str,
     trace_id: str,
@@ -796,6 +947,7 @@ async def _serve_cached(
         router=router_record,
         cache=cache_record,
         latency_ms=latency,
+        budget=budget,
         degraded=degraded,
         tokens_in=hit.tokens_in,
         tokens_out=hit.tokens_out,
@@ -806,7 +958,8 @@ async def _serve_cached(
         baseline_cost_usd=saved,
         cost_saved_usd=saved,
     )
-    await _telemetry(request).record(
+    await _record(
+        request,
         RequestRecord(
             trace_id=trace_id,
             tier=tier,
@@ -822,7 +975,9 @@ async def _serve_cached(
             guard_rejected=cache_record.guard_rejected,
             degraded=degraded,
             created_at=time.time(),
-        )
+        ),
+        tenant=budget.tenant if budget else "anonymous",
+        model=hit.model,
     )
     response = ChatCompletionResponse.build(
         content=hit.content,
@@ -849,9 +1004,35 @@ def _error(
     degraded: list[str],
     started: float,
     path: list[str] | None = None,
+    request: Request | None = None,
+    tenant: str = "anonymous",
 ) -> JSONResponse:
     """Errors carry `x_hlr` too — a failure should be as traceable as a
-    success (docs/API.md)."""
+    success (docs/API.md).
+
+    Refusals are audited when `request` is supplied. Telemetry deliberately
+    counts only served traffic — it drives rate and cost aggregates, and a
+    refusal is neither — but an audit trail whose job is "reconstruct what
+    happened" has to contain the times the gateway said no. A 402 is a spend
+    decision; omitting it would leave the most consequential refusals invisible
+    in the one place built to record them.
+    """
+    if request is not None and getattr(request.app.state, "audit", None) is not None:
+        request.app.state.audit.write({
+            "ts": time.time(),
+            "trace_id": trace_id,
+            "tenant": tenant,
+            "principal": getattr(request.state, "principal", None),
+            "tier": None,
+            "path": path or [],
+            "outcome": "refused",
+            "status": status,
+            "code": code,
+            "reason": message,
+            "cost_micro_usd": 0,
+            "degraded": degraded,
+            "latency_ms": {"total": round((time.perf_counter() - started) * 1000, 1)},
+        })
     payload = ErrorResponse(
         error=ErrorDetail(message=message, type=error_type, code=code),
         x_hlr=HlrMetadata(
@@ -943,6 +1124,18 @@ async def healthz(request: Request) -> Any:
             "semantic_index_size": _semantic_cache(request).size,
             "circuits": request.app.state.breakers.snapshot(),
             "rate_limit_distributed": request.app.state.rate_limiter.distributed,
+            "tenants": [t.name for t in request.app.state.tenants.configured],
+            # False when caps exist but Redis cannot be reached, i.e. frontier
+            # spend is currently uncapped. That is exactly the thing an
+            # operator needs told rather than left to infer from `redis.ok`.
+            # `dropped` > 0 means the trail has holes. Surfaced rather than
+            # left in a log line nobody greps.
+            "audit": request.app.state.audit.stats.as_dict()
+                     if request.app.state.audit.enabled else {"enabled": False},
+            "budgets_enforced": (
+                bool(request.app.state.tenants.configured)
+                and request.app.state.budgets.available
+            ),
         },
     )
     return JSONResponse(status_code=503 if status == "unhealthy" else 200,
@@ -1036,9 +1229,18 @@ async def metrics(request: Request) -> dict[str, Any]:
     renders "no data" rather than crashing.
     """
     settings = _settings(request)
-    return await _telemetry(request).metrics(
+    payload = await _telemetry(request).metrics(
         price_in=settings.frontier_price_in, price_out=settings.frontier_price_out
     )
+    # Attribution: today's spend per tenant, alongside the all-time totals.
+    # Deliberately a different window — a daily cap is a daily question, and
+    # nesting it under the all-time payload without saying so would invite
+    # comparing two numbers that do not cover the same period.
+    payload["tenants"] = {
+        "window": "utc_day",
+        "usage": await request.app.state.budgets.usage(),
+    }
+    return payload
 
 
 @app.get("/metrics/recent")

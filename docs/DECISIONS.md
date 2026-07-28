@@ -402,3 +402,127 @@ than discovered.
 
 **Revisit if.** Deploying to a Linux host with GPU passthrough configured, where
 the container can actually reach the accelerator.
+
+## D22 — A tenant is an account; a key is only a credential
+
+**Decision.** `TENANTS` maps named accounts to key sets and daily USD caps. Keys in
+`GATEWAY_API_KEYS` but not in `TENANTS` belong to an implicit `default` tenant; an open gateway bills
+`anonymous`.
+
+**Why JSON rather than a delimited string.** Every other list setting here is comma-separated, and
+this one is not, deliberately. API keys are opaque and routinely contain `:` and `=` — `sk-proj:abc`
+is a real shape. Any inline separator eventually mis-splits key material, and the failure is silent:
+the key still authenticates (the whole string is compared) while the *tenant* is wrong, so spend
+lands on the wrong account. JSON has no such ambiguity, and pydantic-settings parses it natively.
+
+**Why the two implicit tenants.** Adding budgets to a running deployment must change nothing until
+someone configures a tenant. `default` and `anonymous` give every request an account without
+requiring one to be declared, so `TENANTS={}` behaves exactly as the gateway did before this existed.
+
+**Rejected.** `label=key` inline syntax (mis-splits, see above). One tenant per key, keyed by the
+blake2b principal (opaque digests are an awful thing to write budgets against). A separate
+`TENANT_KEYS` variable (keys listed twice, and the two lists drift).
+
+**Revisit if.** Tenants need anything beyond a cap — rate limits, model allow-lists, price overrides.
+At that point the config belongs in a file or a database rather than an environment variable, and the
+`TENANTS` shape is already JSON so the migration is a loader change.
+
+## D23 — Over budget degrades to local; it does not reject
+
+**Decision.** A tenant past their daily cap keeps getting answers, served by the local tiers only.
+The frontier is removed from the cascade for that request, `degraded` carries
+`budget_exhausted:<tenant>`, and the `reason` says so in prose.
+
+**Why.** This gateway's entire thesis is that most prompts don't need the expensive model. Refusing
+service *because the expensive model is unaffordable* would contradict it — the cheap tiers are
+sitting right there, they cost nothing, and for most prompts they are the correct answer anyway. A
+budget should shape *how* you are served, not whether.
+
+It also makes the cap safe to set aggressively. An operator who knows exhaustion means "cheaper
+answers" rather than "outage" will set a real number; one who knows it means 402s will set it high
+enough to never bind, which defeats the purpose.
+
+**Implementation note worth keeping.** This is one line — `[t for t in tiers if not t.billed]` —
+because `app/cascade.py` is ordered data (D14). Had the cascade been nested `if/else`, "you may not
+escalate to the frontier" would have been a new branch through every path.
+
+**The one exception.** A caller who pinned `model: "gateway:frontier"` gets **402**. A pinned tier
+means "this rung or nothing" — it exists to benchmark one tier in isolation, so silently substituting
+a cheaper one would answer a different question than the one asked. The caller removed the fallback
+themselves, which is the only reason an error is right here.
+
+**Rejected.** 402 for everything (contradicts the thesis, and makes caps unusable in practice).
+Serving from cache only (a cache miss then becomes an outage, and the hit rate decides your
+availability).
+
+**Revisit if.** A tenant needs a hard stop rather than a soft one — a `hard_cap` flag per tenant is
+the natural shape, and the verdict object already carries everything the decision needs.
+
+## D24 — Check before the call, record after, and publish the overshoot
+
+**Decision.** The budget is read before a billed call and incremented after it. A tenant can
+therefore exceed their cap by at most one request.
+
+**Why not reserve up front.** The cost is not knowable until the provider replies — `max_tokens` is a
+ceiling, not a prediction, and most completions come in far under it. Reserving the ceiling would
+deny requests against tokens they were never going to use, which is a worse failure than a small
+overshoot: it is invisible to the caller and it under-uses the budget they paid for.
+
+**The overshoot is bounded and stated.** `MAX_OUTPUT_TOKENS × FRONTIER_PRICE_OUT` — about **$0.04**
+at the shipped defaults. `budgets.max_overshoot_micro()` computes it, startup logs it, and a test
+asserts the bound actually holds rather than asserting it is "small". "Approximately enforced" is
+only an acceptable thing to say when the approximation has a number attached.
+
+**Revisit if.** A provider exposes a cost estimate or a spend API. Then reserve-and-reconcile becomes
+exact rather than pessimistic.
+
+## D25 — Redis down means budgets are not enforced, loudly
+
+**Decision.** If Redis is unreachable the budget check fails **open**. `degraded` carries
+`budget_unavailable`, `x_hlr.budget.enforced` is `false`, `/healthz` reports `budgets_enforced:
+false`, and startup logs a warning.
+
+**Why.** Failing closed turns a cache outage into a total frontier outage — a Redis blip would stop
+all escalation for every tenant. The rate limiter already made this call for the same reason.
+
+This is the least comfortable decision in the module, because the thing that fails open is *spend
+control*. It is defensible only because it is impossible to miss: four separate surfaces say the cap
+is not being applied. A silent fail-open would be indefensible, and that is the actual line.
+
+**Revisit if.** Budgets ever guard someone else's money rather than the operator's own. Then a
+`BUDGET_FAIL_CLOSED=true` switch — refuse billed tiers when the ledger is unreadable — is the right
+default, and it is a two-line change to `check()`.
+
+## D26 — A durable audit trail, separate from telemetry
+
+**Decision.** Append-only JSONL on disk, one line per request including refusals, rotated by size.
+Telemetry's capped Redis stream stays exactly as it was.
+
+**Why not just uncap the stream.** They answer different questions. Telemetry answers "what is
+happening now" and is read by a dashboard on every refresh; it wants to be small, in memory, and
+fast. The audit trail answers "why did request `abc123` cost $0.04 last Tuesday" and wants to be
+complete, durable, and greppable. Uncapping the stream would make the dashboard's data structure
+grow without bound to serve a query it never runs.
+
+**Why JSONL on disk rather than SQLite.** Every log shipper on earth reads JSONL, `jq` reads JSONL,
+and appending needs no lock. SQLite would buy indexed queries at the cost of write contention across
+workers — and the queries people actually run against an audit trail are `grep trace_id` and "sum
+cost by tenant for a day", both of which JSONL handles.
+
+**Why one file per PID.** An audit line carrying `reason`, `gates` and per-gate metrics can exceed
+`PIPE_BUF` (4096 bytes), and above that size concurrent `O_APPEND` writes are no longer atomic — two
+workers would interleave and corrupt each other's JSON. Per-PID files avoid the problem outright
+instead of betting on line length. `cat audit-*.jsonl` reassembles them.
+
+**Never blocks the request path** (invariant 3). Records go on an `asyncio.Queue`; a background task
+batches them and writes in a worker thread. A full queue **drops** rather than blocking — and counts
+every drop, because an audit trail with unreported holes invites conclusions drawn from absence,
+which is worse than having no trail at all.
+
+**Rejected.** Per-record fsync by default (a disk round-trip per request to defend against a machine
+crash, when the failure people actually have is a process crash; available via `AUDIT_FSYNC`).
+Shipping it disabled — a path that is off by default is a path that rots, which is precisely what
+happened to the calibrated confidence mode.
+
+**Revisit if.** Records need to outlive the host, or need querying across workers. Then this becomes
+a shipper target (the JSONL is already the right format) rather than something to reimplement.

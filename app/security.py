@@ -21,6 +21,7 @@ import logging
 import secrets
 import time
 from collections import defaultdict, deque
+from collections.abc import Callable
 from dataclasses import dataclass
 
 logger = logging.getLogger("hlr.security")
@@ -37,6 +38,10 @@ class AuthResult:
     ok: bool
     principal: str = ""      # a stable id for rate limiting; never the key itself
     reason: str = ""
+    # Which account pays for this request. Resolved inside `check()` so the raw
+    # key is never handed back to the caller — request state is a place things
+    # get logged from, and a credential should not live there.
+    tenant: str = "anonymous"
 
 
 class ApiKeyAuth:
@@ -48,9 +53,19 @@ class ApiKeyAuth:
     failure anywhere else, and startup warns loudly when open.
     """
 
-    def __init__(self, keys: set[str], *, require_auth: bool = False) -> None:
+    def __init__(
+        self,
+        keys: set[str],
+        *,
+        require_auth: bool = False,
+        tenant_for: Callable[[str | None], str] | None = None,
+    ) -> None:
         self._keys = {k.strip() for k in keys if k.strip()}
         self._require = require_auth
+        # A function, not a registry: auth should not grow a dependency on
+        # billing to answer "who is this". Defaults to the single-account
+        # behaviour this class had before tenants existed.
+        self._tenant_for = tenant_for or (lambda key: "default" if key else "anonymous")
 
     @property
     def enabled(self) -> bool:
@@ -70,7 +85,7 @@ class ApiKeyAuth:
 
     def check(self, *, authorization: str | None, api_key_header: str | None) -> AuthResult:
         if not self.enabled:
-            return AuthResult(True, principal="anonymous")
+            return AuthResult(True, principal="anonymous", tenant=self._tenant_for(None))
 
         presented = api_key_header or ""
         if not presented and authorization:
@@ -90,7 +105,11 @@ class ApiKeyAuth:
         if not matched:
             return AuthResult(False, reason="invalid API key")
 
-        return AuthResult(True, principal=self.principal_for(presented))
+        return AuthResult(
+            True,
+            principal=self.principal_for(presented),
+            tenant=self._tenant_for(presented),
+        )
 
 
 class RateLimiter:
