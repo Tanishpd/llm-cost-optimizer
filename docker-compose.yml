@@ -1,0 +1,54 @@
+# Gateway + Redis + the mock frontier.
+#
+# Ollama is intentionally NOT a service here: it needs the host's GPU/Metal and
+# its own model storage, so it runs on the host and the containers reach it via
+# host.docker.internal. Bundling it would silently give you CPU-only inference.
+#
+#   ollama serve &                    # on the host, first
+#   docker compose up --build
+
+services:
+  redis:
+    image: redis:7.2-alpine
+    # Bound to loopback: nothing outside the host needs to reach Redis, and an
+    # exposed unauthenticated Redis is a well-known way to lose a machine.
+    ports: ["127.0.0.1:6379:6379"]
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  mock-frontier:
+    build: {context: ., dockerfile: Dockerfile}
+    command: ["uvicorn", "mock_frontier.main:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      MOCK_LATENCY_MS: "1800"
+      MOCK_JITTER_MS: "400"
+    ports: ["127.0.0.1:8001:8001"]
+
+  gateway:
+    build: {context: ., dockerfile: Dockerfile}
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      redis: {condition: service_healthy}
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      # Ollama lives on the host, not in the compose network.
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      FRONTIER_BASE_URL: http://mock-frontier:8001/v1
+      LOG_FORMAT: json
+      # Empty means the gateway runs OPEN. Fine while bound to loopback as
+      # above; set a key before exposing this anywhere else.
+      GATEWAY_API_KEYS: "${GATEWAY_API_KEYS:-}"
+      RATE_LIMIT_PER_MINUTE: "60"
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    # Give in-flight requests time to finish. A cascade that reached the
+    # frontier can legitimately be mid-flight for seconds; the default 10s
+    # would cut those off.
+    stop_grace_period: 40s

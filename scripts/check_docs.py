@@ -120,7 +120,9 @@ def check_promised_files_exist() -> None:
     for rel in ("requirements.txt", "requirements-dev.txt", ".env.example", "LICENSE",
                 "app/main.py", "app/cascade.py", "app/confidence.py", "app/security.py",
                 "eval/dataset.py", "eval/run_eval.py", "scripts/preflight.py",
-                "scripts/demo.py", "static/dashboard.html", "mock_frontier/main.py"):
+                "scripts/demo.py", "scripts/loadtest.py", "static/dashboard.html",
+                "mock_frontier/main.py", "Dockerfile", "docker-compose.yml",
+                "app/resilience.py", "app/ratelimit.py", "app/logging_setup.py"):
         check(f"{rel} exists", (ROOT / rel).exists())
 
 

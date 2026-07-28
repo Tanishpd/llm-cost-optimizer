@@ -944,6 +944,39 @@ async def route_only(body: ChatCompletionRequest, request: Request) -> RouteDeci
     )
 
 
+@app.get("/livez")
+async def livez() -> dict[str, Any]:
+    """Liveness: is the process up? Nothing else.
+
+    Deliberately dependency-free. A liveness probe that checks Redis will
+    restart a healthy gateway during a Redis blip — turning a degradation into
+    an outage, which is the opposite of what the probe is for.
+    """
+    return {"status": "alive"}
+
+
+@app.get("/readyz")
+async def readyz(request: Request) -> Any:
+    """Readiness: can this instance serve a request *right now*?
+
+    Stricter than /healthz. A gateway with no reachable model tier should be
+    pulled from the load balancer even though the process is fine — and
+    returned once a tier recovers, without a restart.
+    """
+    ollama_ok, detail = await _ollama(request).health()
+    frontier_ok, _ = await _frontier(request).health()
+    ready = ollama_ok or frontier_ok
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={
+            "status": "ready" if ready else "not_ready",
+            "ollama": ollama_ok,
+            "frontier": frontier_ok,
+            "detail": "" if ready else f"no model tier reachable: {detail}",
+        },
+    )
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard() -> HTMLResponse:
     """Self-contained live dashboard. Reads the same public endpoints any other
@@ -958,7 +991,10 @@ async def metrics(request: Request) -> dict[str, Any]:
     Returns structurally complete zeros when Redis is down, so a dashboard
     renders "no data" rather than crashing.
     """
-    return await _telemetry(request).metrics()
+    settings = _settings(request)
+    return await _telemetry(request).metrics(
+        price_in=settings.frontier_price_in, price_out=settings.frontier_price_out
+    )
 
 
 @app.get("/metrics/recent")

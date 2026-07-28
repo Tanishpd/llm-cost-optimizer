@@ -27,7 +27,9 @@ logger = logging.getLogger("hlr.security")
 
 # Reachable without a key: liveness probes must work for a load balancer that
 # has no credentials, and neither endpoint exposes traffic or cost data.
-PUBLIC_PATHS = frozenset({"/healthz", "/", "/docs", "/openapi.json", "/redoc"})
+PUBLIC_PATHS = frozenset({
+    "/healthz", "/livez", "/readyz", "/", "/docs", "/openapi.json", "/redoc",
+})
 
 
 @dataclass(frozen=True)
