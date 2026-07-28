@@ -19,6 +19,7 @@ from typing import Any, Literal
 
 from app.confidence import GateVerdict, evaluate_gate
 from app.providers.base import Completion, ProviderError, ProviderTimeout, ProviderUnavailable
+from app.resilience import BreakerRegistry, RetryPolicy, call_with_resilience
 
 TierName = Literal["local_small", "local_large", "frontier"]
 
@@ -94,6 +95,8 @@ async def execute(
     runners: dict[str, Runner],
     confidence_mode: Literal["raw", "calibrated"] = "raw",
     calibrators: dict[str, Any] | None = None,
+    breakers: BreakerRegistry | None = None,
+    retry_policy: RetryPolicy | None = None,
 ) -> CascadeResult:
     """Walk the chain from `start` until a tier's answer is accepted.
 
@@ -122,7 +125,21 @@ async def execute(
         result.path.append(tier.name)
         started = time.perf_counter()
         try:
-            completion = await runner(tier.model, messages)
+            if breakers is None:
+                completion = await runner(tier.model, messages)
+            else:
+                # A tier that has failed repeatedly is skipped in microseconds
+                # rather than costing this request another full timeout.
+                # Both `tier` and `runner` are bound as defaults. The call is
+                # awaited within this iteration today, so late binding would
+                # not bite — but a future refactor that defers it would, and
+                # silently route to the wrong tier's runner.
+                completion = await call_with_resilience(
+                    lambda t=tier, r=runner: r(t.model, messages),
+                    breaker=breakers.get(tier.name),
+                    policy=retry_policy or RetryPolicy(),
+                    billable=tier.billed,
+                )
         except ProviderUnavailable as exc:
             result.latency_ms[tier.name] = round((time.perf_counter() - started) * 1000, 1)
             result.degraded.append(f"{tier.name}_unavailable")

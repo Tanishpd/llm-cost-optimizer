@@ -34,10 +34,13 @@ from app.cascade import build_tiers, entry_index, execute
 from app.config import Settings, get_settings
 from app.costs import TokenUsage, compute_cost, micro_to_usd
 from app.dashboard import render as render_dashboard
+from app.logging_setup import configure as configure_logging
+from app.logging_setup import set_trace_id
 from app.providers.base import ProviderTimeout, ProviderUnavailable
 from app.providers.frontier import FrontierProvider
 from app.providers.ollama import OllamaProvider
 from app.ratelimit import RedisRateLimiter
+from app.resilience import BreakerRegistry, RetryPolicy
 from app.router.policy import decide
 from app.schemas import (
     CacheRecord,
@@ -66,6 +69,7 @@ async def lifespan(app: FastAPI):
     connection reuse and leak sockets under load.
     """
     settings = get_settings()
+    configure_logging(level=settings.log_level, fmt=settings.log_format)
     client = httpx.AsyncClient(
         timeout=httpx.Timeout(
             settings.ollama_timeout_s, connect=settings.ollama_connect_timeout_s
@@ -99,6 +103,14 @@ async def lifespan(app: FastAPI):
     )
     app.state.telemetry = Telemetry(redis)
     app.state.singleflight = SingleFlight(redis)
+    app.state.breakers = BreakerRegistry(
+        failure_threshold=settings.breaker_failure_threshold,
+        cooldown_s=settings.breaker_cooldown_s,
+    )
+    app.state.retry_policy = RetryPolicy(
+        attempts=settings.retry_attempts,
+        base_delay_s=settings.retry_base_delay_s,
+    )
     app.state.auth = ApiKeyAuth(settings.api_key_set, require_auth=settings.require_auth)
     # Redis-backed so every worker shares one window. Falls back to
     # per-process state if Redis is unreachable — a limit that multiplies by
@@ -282,6 +294,9 @@ async def add_trace_id(request: Request, call_next):
     a header so a caller can correlate without parsing the body."""
     trace_id = request.headers.get("x-hlr-trace-id") or uuid.uuid4().hex[:12]
     request.state.trace_id = trace_id
+    # Follows the async task, so every log line from this request carries the
+    # same id the caller got back — without threading it through every call.
+    set_trace_id(trace_id)
     response = await call_next(request)
     response.headers["X-HLR-Trace-Id"] = trace_id
     return response
@@ -561,6 +576,8 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
             "frontier": run_frontier,
         },
         confidence_mode=settings.confidence_mode,
+        breakers=request.app.state.breakers,
+        retry_policy=request.app.state.retry_policy,
     )
 
     latency.update(outcome.latency_ms)
@@ -880,6 +897,8 @@ async def healthz(request: Request) -> Any:
             },
             "missing_models": missing,
             "semantic_index_size": _semantic_cache(request).size,
+            "circuits": request.app.state.breakers.snapshot(),
+            "rate_limit_distributed": request.app.state.rate_limiter.distributed,
         },
     )
     return JSONResponse(status_code=503 if status == "unhealthy" else 200,

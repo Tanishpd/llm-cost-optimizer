@@ -100,6 +100,20 @@ class Settings(BaseSettings):
     max_output_tokens: int = 4_096
     max_body_bytes: int = 256_000
 
+    # ---- Resilience ------------------------------------------------------
+    # A dead tier otherwise costs every request a full timeout before the
+    # cascade escalates past it. The breaker turns that into a fast skip.
+    breaker_failure_threshold: int = 3
+    breaker_cooldown_s: float = 30.0
+    # Narrow by design: only timeouts and connection errors, and the frontier
+    # is not retried on timeouts because the tokens may already be billed.
+    retry_attempts: int = 2
+    retry_base_delay_s: float = 0.25
+
+    # ---- Logging ---------------------------------------------------------
+    log_level: str = "INFO"
+    log_format: Literal["text", "json"] = "text"
+
     # ---- Gateway ---------------------------------------------------------
     default_max_tokens: int = 512
     default_temperature: float = 0.0
