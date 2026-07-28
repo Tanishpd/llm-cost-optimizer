@@ -19,12 +19,11 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-
-from decimal import Decimal
 
 from app.costs import TokenUsage, micro_to_usd, price_micro_usd, saved_pct
 
