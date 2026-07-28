@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.14 is what this project targets; 3.12 is the floor declared in
+        # pyproject. Testing both catches syntax that only newer CPython allows.
+        python-version: ["3.12", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      # Integration tests need a live Ollama with ~2.6 GB of models and are
+      # deselected here on purpose. The unit suite runs with no network at all
+      # — that constraint is what keeps it usable in CI.
+      - name: Unit tests
+        run: pytest -m "not integration" -q
+
+      - name: Assert no accidental network use
+        # The unit suite must stay hermetic. If a test starts reaching out,
+        # it will hang or fail here rather than becoming flaky later.
+        run: pytest -m "not integration" -q -p no:cacheprovider
+        env:
+          http_proxy: http://127.0.0.1:9
+          https_proxy: http://127.0.0.1:9
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: pip install ruff
+      - name: Ruff
+        run: ruff check app eval scripts mock_frontier tests
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      # This doc set has drifted twice in exactly these ways, so the checks
+      # that caught it by hand now run automatically.
+      - name: Cross-document consistency
+        run: python scripts/check_docs.py

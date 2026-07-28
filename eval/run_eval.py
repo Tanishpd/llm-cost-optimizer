@@ -24,7 +24,6 @@ import os
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
 
 import httpx
 import numpy as np
@@ -197,7 +196,9 @@ async def collect(
     return results
 
 
-def build_matrix(results: dict[str, PromptResult], gate: str) -> tuple[np.ndarray, np.ndarray, list[str]]:
+def build_matrix(
+    results: dict[str, PromptResult], gate: str
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """Feature matrix and labels for one gate."""
     tier = next(t for t, g in TIER_TO_GATE.items() if g == gate)
     X, y, ids = [], [], []
@@ -230,7 +231,8 @@ async def main() -> int:
         prompts = prompts[: args.limit]
 
     print(f"\ndataset: {summary()}")
-    print(f"running: {len(prompts)} prompt(s), mode={'FULL (real API)' if use_real else 'AUTO (free)'}")
+    mode_label = "FULL (real API)" if use_real else "AUTO (free)"
+    print(f"running: {len(prompts)} prompt(s), mode={mode_label}")
     print(f"cache:   eval/runs/{tag}.json\n")
 
     frontier = judge = None
@@ -285,7 +287,9 @@ async def main() -> int:
             print(f"           -> {report.verdict}")
 
     save(CALIBRATOR_PATH, calibrators, reports)
-    print(f"\nwrote {CALIBRATOR_PATH.relative_to(Path.cwd()) if CALIBRATOR_PATH.is_relative_to(Path.cwd()) else CALIBRATOR_PATH}")
+    shown = (CALIBRATOR_PATH.relative_to(Path.cwd())
+             if CALIBRATOR_PATH.is_relative_to(Path.cwd()) else CALIBRATOR_PATH)
+    print(f"\nwrote {shown}")
     print("run `python -m eval.report` for the cost-vs-quality frontier.\n")
     return 0
 

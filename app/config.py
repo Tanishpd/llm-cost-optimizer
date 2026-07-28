@@ -84,6 +84,22 @@ class Settings(BaseSettings):
     eval_judge_model: str = "claude-sonnet-5"
     eval_judge_api_key: str = ""
 
+    # ---- Security --------------------------------------------------------
+    # Comma-separated. Empty means the gateway runs OPEN, which is only
+    # acceptable on a loopback bind — startup warns loudly, and REQUIRE_AUTH
+    # turns it into a hard failure.
+    gateway_api_keys: str = ""
+    require_auth: bool = False
+    # Sliding window, per API key (per client IP when running open).
+    # 0 disables. In-process, so under multiple workers the effective limit
+    # multiplies by the worker count.
+    rate_limit_per_minute: int = 60
+    # Request bounds. Each is a cost control and a stability control at once.
+    max_prompt_chars: int = 32_000
+    max_messages: int = 50
+    max_output_tokens: int = 4_096
+    max_body_bytes: int = 256_000
+
     # ---- Gateway ---------------------------------------------------------
     default_max_tokens: int = 512
     default_temperature: float = 0.0
@@ -93,6 +109,10 @@ class Settings(BaseSettings):
     @classmethod
     def _strip_trailing_slash(cls, v: str) -> str:
         return v.rstrip("/")
+
+    @property
+    def api_key_set(self) -> set[str]:
+        return {k.strip() for k in self.gateway_api_keys.split(",") if k.strip()}
 
     def threshold_for(self, gate: Literal["small", "large"]) -> float:
         """The active threshold for a gate, respecting `confidence_mode`.

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import shutil
 import subprocess
@@ -104,7 +103,8 @@ def check_venv() -> Check:
         "venv",
         status,
         f"{'active' if in_venv else 'NOT active'}, {deps}",
-        "" if status == "pass" else "python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt",
+        "" if status == "pass"
+        else "python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt",
     )
 
 
@@ -185,7 +185,8 @@ def check_logprobs() -> Check:
             {
                 "model": SMALL_MODEL,
                 "messages": [
-                    {"role": "user", "content": "What is the capital of France? Answer in one word."}
+                    {"role": "user",
+                     "content": "What is the capital of France? Answer in one word."}
                 ],
                 "stream": False,
                 "logprobs": True,
@@ -195,7 +196,8 @@ def check_logprobs() -> Check:
             timeout=180,
         )
     except Exception as exc:  # noqa: BLE001
-        return Check("logprobs", "fail", f"request failed: {exc}", "Check that SMALL_MODEL is pulled.")
+        return Check("logprobs", "fail", f"request failed: {exc}",
+                     "Check that SMALL_MODEL is pulled.")
 
     logprobs = resp.get("logprobs")
     if not logprobs:
@@ -297,7 +299,9 @@ def probe_geo_mean() -> list[Check]:
             scores[label] = round(extract_metrics(resp.get("logprobs") or []).geo_mean, 4)
         else:
             summary = ", ".join(f"{k}={v}" for k, v in scores.items())
-            checks.append(Check(f"probe:{role}", "pass", f"{model} geo_mean: {summary}", data=scores))
+            checks.append(
+                Check(f"probe:{role}", "pass", f"{model} geo_mean: {summary}", data=scores)
+            )
     return checks
 
 
@@ -321,7 +325,8 @@ def run(probe: bool = False) -> list[Check]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="machine-readable output")
-    parser.add_argument("--probe", action="store_true", help="also measure geo_mean per model (slow)")
+    parser.add_argument("--probe", action="store_true",
+                        help="also measure geo_mean per model (slow)")
     args = parser.parse_args()
 
     checks = run(probe=args.probe)
@@ -341,7 +346,8 @@ def main() -> int:
     warned = [c for c in checks if c.status == "warn"]
     if failed:
         if not args.json:
-            print(f"  {RED}{len(failed)} check(s) failed{RESET} — fix the above before continuing.\n")
+            print(f"  {RED}{len(failed)} check(s) failed{RESET} — "
+                  "fix the above before continuing.\n")
         return 1
     if not args.json:
         suffix = f" ({len(warned)} warning{'s' if len(warned) != 1 else ''})" if warned else ""

@@ -21,7 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-from eval.calibration import FEATURE_NAMES, cross_val_predictions, validate
+from eval.calibration import cross_val_predictions, validate
 from eval.run_eval import TIER_TO_GATE, build_matrix, load_cached
 
 # Per-1M-token prices used for the cost columns. Placeholders — the same ones
@@ -100,7 +100,8 @@ def _table(rows: list[SweepRow], highlight: float | None = None) -> str:
         "    ------  ---------  -----------  ---------------  -------",
     ]
     for r in rows:
-        mark = " <-- shipped" if highlight is not None and abs(r.threshold - highlight) < 1e-9 else ""
+        shipped = highlight is not None and abs(r.threshold - highlight) < 1e-9
+        mark = " <-- shipped" if shipped else ""
         out.append(
             f"    {r.threshold:>6.2f}  {r.escalation_rate:>8.0%}  "
             f"{r.false_cheap:>4} ({r.false_cheap_rate:>4.0%})  "
@@ -162,18 +163,21 @@ def main() -> int:
 
         print(f"\n--- gate {gate} ({'0.5B' if gate == 'small' else '3B'}) ---")
         print(f"  n={len(labels)}   acceptable={labels.mean():.0%}")
-        print(f"  by category: " + ", ".join(f"{c}={rate:.0%} (n={n})" for c, (n, rate) in cats.items()))
-        print(f"\n  raw mode — thresholding geo_mean:")
+        breakdown = ", ".join(f"{c}={rate:.0%} (n={n})" for c, (n, rate) in cats.items())
+        print(f"  by category: {breakdown}")
+        print("\n  raw mode — thresholding geo_mean:")
         print(_table(raw_rows, highlight=shipped[gate]))
 
         print(f"\n  calibration: ECE={report.ece:.3f} (95% CI upper {report.ece_ci_high:.3f}), "
               f"Brier={report.brier:.3f} vs base rate {report.brier_baseline:.3f}")
-        print(f"  verdict: {'PASS — calibration is trustworthy' if report.passed else 'FAIL — ' + report.verdict}")
+        verdict = ("PASS — calibration is trustworthy" if report.passed
+                   else f"FAIL — {report.verdict}")
+        print(f"  verdict: {verdict}")
 
         if report.passed:
             oof = cross_val_predictions(X, y)
             cal_rows = sweep(oof, y, [0.70, 0.75, 0.80, 0.85, 0.90, 0.92, 0.95])
-            print(f"\n  calibrated mode — thresholding P(acceptable):")
+            print("\n  calibrated mode — thresholding P(acceptable):")
             print(_table(cal_rows, highlight=0.92 if gate == "small" else 0.85))
 
     if args.json:

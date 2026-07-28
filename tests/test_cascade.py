@@ -11,7 +11,7 @@ import math
 
 import pytest
 
-from app.cascade import CascadeResult, Tier, build_tiers, entry_index, execute
+from app.cascade import CascadeResult, build_tiers, entry_index, execute
 from app.providers.base import Completion, ProviderTimeout, ProviderUnavailable
 
 TIERS = build_tiers(

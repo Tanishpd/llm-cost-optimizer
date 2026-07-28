@@ -44,7 +44,8 @@ class EvalPrompt:
     note: str = ""
 
 
-def _f(i: int, prompt: str, expected: tuple[str, ...], forbidden: tuple[str, ...] = ()) -> EvalPrompt:
+def _f(i: int, prompt: str, expected: tuple[str, ...], forbidden: tuple[str,
+    ...] = ()) -> EvalPrompt:
     return EvalPrompt(f"fact-{i:02d}", "easy_factual", prompt, "auto", expected, forbidden)
 
 
@@ -52,7 +53,8 @@ def _a(i: int, prompt: str, expected: tuple[str, ...]) -> EvalPrompt:
     return EvalPrompt(f"arith-{i:02d}", "arithmetic", prompt, "auto", expected)
 
 
-def _o(i: int, prompt: str, expected: tuple[str, ...], forbidden: tuple[str, ...] = ()) -> EvalPrompt:
+def _o(i: int, prompt: str, expected: tuple[str, ...], forbidden: tuple[str,
+    ...] = ()) -> EvalPrompt:
     return EvalPrompt(f"obsc-{i:02d}", "obscure_factual", prompt, "auto", expected, forbidden)
 
 

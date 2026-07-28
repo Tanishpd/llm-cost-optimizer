@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
 import urllib.error
 import urllib.request
 
@@ -215,7 +214,7 @@ def main() -> int:
               f"{DIM}(false hits that did not happen){RESET}")
 
     print(f"\n{DIM}  Local tiers bill $0 and the baseline prices every request at frontier")
-    print(f"  rates — both assumptions are documented in docs/DECISIONS.md D13.")
+    print("  rates — both assumptions are documented in docs/DECISIONS.md D13.")
     print(f"  Live view: {url}/dashboard{RESET}")
 
     if matched < total:

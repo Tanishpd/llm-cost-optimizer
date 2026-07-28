@@ -63,7 +63,8 @@ class CachedAnswer:
             logger.warning("discarding unparseable cache entry: %s", exc)
             return None
         if not isinstance(data, dict):
-            logger.warning("discarding cache entry of type %s, expected object", type(data).__name__)
+            logger.warning("discarding cache entry of type %s, expected object",
+                type(data).__name__)
             return None
         try:
             known = set(cls.__dataclass_fields__)

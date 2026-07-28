@@ -249,7 +249,8 @@ class ValidationReport:
         return asdict(self)
 
 
-def validate(gate: str, X: np.ndarray, y: np.ndarray, *, folds: int = 5, l2: float = 1.0) -> ValidationReport:
+def validate(gate: str, X: np.ndarray, y: np.ndarray, *, folds: int = 5,
+    l2: float = 1.0) -> ValidationReport:
     """Fit under cross-validation and judge the result honestly."""
     n = len(y)
     if n < 10 or len(np.unique(y)) < 2:
@@ -295,7 +296,8 @@ def should_flip(reports: dict[str, ValidationReport]) -> bool:
     return bool(reports) and all(r.passed for r in reports.values())
 
 
-def save(path: Path, calibrators: dict[str, Calibrator], reports: dict[str, ValidationReport]) -> None:
+def save(path: Path, calibrators: dict[str, Calibrator], reports: dict[str,
+    ValidationReport]) -> None:
     """Persist fits *and* their validation, so nobody can load a calibrator
     without also being able to see whether it earned its place."""
     path.parent.mkdir(parents=True, exist_ok=True)

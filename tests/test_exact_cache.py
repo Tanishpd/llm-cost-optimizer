@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import pytest
 from redis.exceptions import ConnectionError as RedisConnectionError
-from redis.exceptions import RedisError
 
 from app.cache.exact import BILLED_TIERS, CachedAnswer, ExactCache
 from app.cache.keys import build_key

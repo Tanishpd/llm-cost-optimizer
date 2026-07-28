@@ -106,7 +106,8 @@ def test_non_frontier_tiers_bill_zero_but_still_have_a_baseline(tier):
     """The whole savings claim: local work is free, but the baseline still
     prices it as if it had gone to the frontier."""
     c = compute_cost(
-        served_by=tier, usage=TokenUsage(41, 156), price_in_per_m=PRICE_IN, price_out_per_m=PRICE_OUT
+        served_by=tier, usage=TokenUsage(41, 156), price_in_per_m=PRICE_IN,
+            price_out_per_m=PRICE_OUT
     )
     assert c.cost_micro_usd == 0
     assert c.baseline_micro_usd > 0
@@ -154,7 +155,8 @@ def test_breakdown_serializes_to_api_field_names():
 
 def test_saved_equals_baseline_minus_cost_identity():
     """docs/API.md reconciliation identity."""
-    c = CostBreakdown(tokens_in=1, tokens_out=1, cost_micro_usd=859_000, baseline_micro_usd=1_705_700)
+    c = CostBreakdown(tokens_in=1, tokens_out=1, cost_micro_usd=859_000,
+        baseline_micro_usd=1_705_700)
     assert c.saved_micro_usd == 1_705_700 - 859_000
 
 
