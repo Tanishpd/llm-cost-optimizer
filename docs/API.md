@@ -64,6 +64,94 @@ count, which is worse than shared and far better than none.
 
 Successful responses carry `X-RateLimit-Remaining`.
 
+### Tenants and budgets
+
+A key authenticates; a **tenant** pays. Without `TENANTS` every key draws on the
+same frontier spend — that is the shipped default and changes nothing.
+
+```bash
+GATEWAY_API_KEYS=sk-acme-1,sk-globex-1
+TENANTS='{"acme":   {"keys": ["sk-acme-1"],   "daily_budget_usd": "5.00"},
+          "globex": {"keys": ["sk-globex-1"], "daily_budget_usd": "1.00"}}'
+```
+
+JSON rather than a delimited string on purpose: API keys are opaque and may
+contain `:` or `=`, so an inline separator eventually mis-splits key material —
+and the failure is silent, because the key still authenticates while the spend
+lands on the wrong account ([D22](DECISIONS.md)).
+
+Keys not listed under a tenant belong to `default`; an open gateway bills
+`anonymous`. Both take `DEFAULT_DAILY_BUDGET_USD`, `0` (unlimited) by default.
+
+**Windows are UTC calendar days**, and only the frontier tier costs money — so
+local answers and cache hits never consume budget.
+
+**Over budget degrades; it does not reject.** The frontier is dropped from the
+cascade and the request is served locally:
+
+```json
+{
+  "tier": "local_large",
+  "path": ["local_large"],
+  "degraded": ["budget_exhausted:acme"],
+  "reason": "daily budget exhausted: $0.000628 of $0.000500 spent today (UTC); frontier tier withheld, so: served by local_large: confidence 0.78 at or above 0.62",
+  "budget": {"tenant": "acme", "spent_usd": 0.000628, "limit_usd": 0.0005,
+             "remaining_usd": 0.0, "enforced": true}
+}
+```
+
+The one exception is a caller who pinned `model: "gateway:frontier"` — they
+removed the fallback themselves, so they get **402** ([D23](DECISIONS.md)).
+
+**The cap is approximate by one request, and the approximation has a number.**
+The budget is read before the call and recorded after, because cost is not
+knowable until the provider replies. The overshoot is bounded by
+`MAX_OUTPUT_TOKENS × FRONTIER_PRICE_OUT` — about **$0.04** at the defaults, and
+startup logs the exact figure ([D24](DECISIONS.md)).
+
+**If Redis is unreachable, budgets are not enforced.** Failing closed would turn
+a cache outage into a total frontier outage. It is impossible to miss:
+`degraded` carries `budget_unavailable`, `budget.enforced` is `false`,
+`/healthz` reports `budgets_enforced: false`, and startup warns
+([D25](DECISIONS.md)).
+
+`GET /metrics` carries per-tenant attribution under its own window, because a
+daily cap is a daily question and the rest of `/metrics` is all-time:
+
+```json
+"tenants": {"window": "utc_day",
+            "usage": {"acme": {"spent_usd": 0.000628, "limit_usd": 0.0005,
+                               "remaining_usd": 0.0, "enforced": true}}}
+```
+
+### Audit trail
+
+Every request writes one JSON line to `AUDIT_PATH`, **including refusals** — a
+402 is a spend decision, and omitting it would leave the most consequential ones
+invisible in the one place built to record them.
+
+```
+audit/audit-8961.jsonl
+{"ts":1785258422.7, "trace_id":"b6ee310fb7af", "tenant":"acme",
+ "principal":"777a832b78f0", "tier":"local_large", "path":["local_large"],
+ "cost_micro_usd":0, "degraded":["budget_exhausted:acme"],
+ "reason":"daily budget exhausted: ...", "gates":[...]}
+```
+
+`principal` is a blake2b digest — the raw key is never written. One file per
+worker PID (a line can exceed `PIPE_BUF`, above which concurrent `O_APPEND` is
+not atomic), rotated at `AUDIT_MAX_BYTES` keeping `AUDIT_KEEP_FILES` siblings.
+`cat audit-*.jsonl` reassembles them.
+
+This is **not** `/metrics/recent`, which reads a Redis stream capped at 10k
+entries. That answers "what is happening now"; this answers "why did request
+`abc123` cost $0.04 last Tuesday", and survives restarts ([D26](DECISIONS.md)).
+
+Writes never touch the request path — records are queued and drained by a
+background task. A full queue **drops** rather than blocking, and `/healthz`
+reports the count, because a trail with unreported holes would be worse than no
+trail at all.
+
 ---
 
 ## POST /v1/chat/completions
@@ -452,6 +540,7 @@ Invariant 1.
 | 413 | `request_too_large` | Body over `MAX_BODY_BYTES` |
 | 413 | `prompt_too_long` | Prompt over `MAX_PROMPT_CHARS` |
 | 413 | `too_many_messages` | More than `MAX_MESSAGES` |
+| 402 | `budget_exhausted` | Tenant over their daily cap **and** the caller pinned `gateway:frontier`. Without the pin, the request is served locally instead |
 | 429 | `rate_limited` | Window exhausted. Carries `Retry-After` |
 | 503 | `all_tiers_down` | No tier is reachable |
 | 504 | `upstream_timeout` | Every tier exceeded its timeout |

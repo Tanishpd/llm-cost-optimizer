@@ -10,6 +10,8 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from app.audit import AuditLog
+from app.budgets import BudgetLedger, TenantRegistry
 from app.cache.exact import ExactCache
 from app.cache.semantic import SemanticCache
 from app.cache.singleflight import SingleFlight
@@ -102,6 +104,8 @@ def client_factory():
         limits: RequestLimits | None = None,
         breakers: BreakerRegistry | None = None,
         calibrators: dict | None = None,
+        tenants: TenantRegistry | None = None,
+        budget_redis=None,
     ) -> TestClient:
         c = TestClient(app)
         c.app.state.settings = settings or Settings(_env_file=None)
@@ -131,8 +135,15 @@ def client_factory():
         # deliberately fails a tier repeatedly does not trip one mid-suite.
         c.app.state.breakers = breakers or BreakerRegistry(failure_threshold=10**6)
         c.app.state.retry_policy = RetryPolicy(attempts=1)
+        # Disabled: the request path must be exercised without any test
+        # writing files. tests/test_audit.py covers the enabled path.
+        c.app.state.audit = AuditLog("unused", enabled=False)
         # Empty by default: the shipped mode is `raw`, which ignores these.
         c.app.state.calibrators = calibrators if calibrators is not None else {}
+        # No tenants and no default cap: budgets are opt-in, so the
+        # shipped default must be what most tests exercise.
+        c.app.state.tenants = tenants or TenantRegistry()
+        c.app.state.budgets = BudgetLedger(budget_redis, c.app.state.tenants)
         return c
 
     return _make

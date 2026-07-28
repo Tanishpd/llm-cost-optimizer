@@ -28,3 +28,6 @@ dump.rdb
 
 # macOS
 .DS_Store
+
+# Audit trail (AUDIT_PATH). Durable by design, and not source.
+audit/

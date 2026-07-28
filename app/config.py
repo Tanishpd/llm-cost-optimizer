@@ -9,10 +9,13 @@ from __future__ import annotations
 
 from decimal import Decimal
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# One-way: budgets.py knows nothing about settings, so this cannot cycle.
+from app.budgets import Tenant
 
 
 class Settings(BaseSettings):
@@ -110,6 +113,39 @@ class Settings(BaseSettings):
     max_output_tokens: int = 4_096
     max_body_bytes: int = 256_000
 
+    # ---- Tenancy and budgets ---------------------------------------------
+    # JSON, deliberately, rather than a delimited string: API keys are opaque
+    # and may contain ':' or '=', so any inline separator risks silently
+    # mis-splitting key material. Keys listed in GATEWAY_API_KEYS but not here
+    # belong to the `default` tenant, so adding this to a running deployment
+    # changes nothing until a named tenant appears.
+    #
+    #   TENANTS='{"acme": {"keys": ["sk-a","sk-b"], "daily_budget_usd": "5.00"}}'
+    tenants: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # Applies to `default` and `anonymous`. 0 = unlimited, which is the
+    # shipped default — turning on budgets must be a deliberate act, not
+    # something an upgrade does to you.
+    default_daily_budget_usd: Decimal = Decimal("0")
+
+    # ---- Audit trail -----------------------------------------------------
+    # On by default. The gateway spends money per request, so a durable record
+    # of what it decided is the kind of thing you want on unless you turned it
+    # off -- and a path that ships disabled is a path that rots (the calibrated
+    # mode did exactly that). Telemetry is a capped stream and answers a
+    # different question; see app/audit.py.
+    audit_enabled: bool = True
+    audit_path: str = "audit"
+    audit_max_bytes: int = 50 * 1024 * 1024
+    audit_keep_files: int = 5
+    # Records queued but unwritten when the process is killed are lost. The
+    # queue bounds that loss; a full queue drops rather than blocking the
+    # request path, and the drops are counted and reported.
+    audit_queue_size: int = 10_000
+    # Per-record fsync: durable across a machine crash, at a disk round-trip
+    # per request. Off by default; a flush per batch survives a process crash,
+    # which is the failure people actually have.
+    audit_fsync: bool = False
+
     # ---- Resilience ------------------------------------------------------
     # A dead tier otherwise costs every request a full timeout before the
     # cascade escalates past it. The breaker turns that into a fast skip.
@@ -136,7 +172,46 @@ class Settings(BaseSettings):
 
     @property
     def api_key_set(self) -> set[str]:
-        return {k.strip() for k in self.gateway_api_keys.split(",") if k.strip()}
+        """Every key the gateway accepts — the flat list plus every tenant's.
+
+        A key configured only under `TENANTS` still authenticates, so tenants
+        do not have to be listed twice. Listing a key in both places is fine
+        and idempotent.
+        """
+        flat = {k.strip() for k in self.gateway_api_keys.split(",") if k.strip()}
+        for spec in self.tenants.values():
+            flat |= {str(k).strip() for k in (spec.get("keys") or []) if str(k).strip()}
+        return flat
+
+    def tenant_list(self) -> list[Tenant]:
+        """Parse `TENANTS` into the registry's shape.
+
+        Raises on a malformed entry rather than skipping it: a tenant that
+        silently fails to load is a tenant with no budget, which is the exact
+        outcome the setting exists to prevent.
+        """
+        out = []
+        for name, spec in self.tenants.items():
+            if not isinstance(spec, dict):
+                raise ValueError(f"TENANTS[{name!r}] must be an object, got {type(spec).__name__}")
+            keys = spec.get("keys") or []
+            if isinstance(keys, str):
+                raise ValueError(f"TENANTS[{name!r}].keys must be a list, not a string")
+            try:
+                budget = Decimal(str(spec.get("daily_budget_usd", "0")))
+            except (ArithmeticError, ValueError) as exc:
+                raise ValueError(
+                    f"TENANTS[{name!r}].daily_budget_usd is not a number: "
+                    f"{spec.get('daily_budget_usd')!r}"
+                ) from exc
+            if budget < 0:
+                raise ValueError(f"TENANTS[{name!r}].daily_budget_usd is negative")
+            out.append(Tenant(
+                name=name,
+                keys=frozenset(str(k).strip() for k in keys if str(k).strip()),
+                daily_budget_usd=budget,
+            ))
+        return out
 
     def threshold_for(self, gate: Literal["small", "large"]) -> float:
         """The active threshold for a gate, respecting `confidence_mode`.

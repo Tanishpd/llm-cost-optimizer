@@ -17,6 +17,8 @@ import math
 import pytest
 from fastapi.testclient import TestClient
 
+from app.audit import AuditLog
+from app.budgets import BudgetLedger, TenantRegistry
 from app.cache.exact import ExactCache
 from app.cache.semantic import SemanticCache
 from app.cache.singleflight import SingleFlight
@@ -163,7 +165,8 @@ def test_empty_answer_still_produces_a_valid_stream():
 
 @pytest.fixture
 def stream_client():
-    def _make(stub, *, frontier=None, cache=None, settings=None):
+    def _make(stub, *, frontier=None, cache=None, settings=None,
+              tenants=None, budget_redis=None):
         c = TestClient(app)
         c.app.state.settings = settings or Settings(_env_file=None)
         c.app.state.ollama = stub
@@ -179,7 +182,14 @@ def stream_client():
         c.app.state.limits = RequestLimits()
         c.app.state.breakers = BreakerRegistry(failure_threshold=10**6)
         c.app.state.retry_policy = RetryPolicy(attempts=1)
+        # Disabled: the request path must be exercised without any test
+        # writing files. tests/test_audit.py covers the enabled path.
+        c.app.state.audit = AuditLog("unused", enabled=False)
         c.app.state.calibrators = {}
+        # No tenants and no default cap: budgets are opt-in, so the
+        # shipped default must be what most tests exercise.
+        c.app.state.tenants = tenants or TenantRegistry()
+        c.app.state.budgets = BudgetLedger(budget_redis, c.app.state.tenants)
         return c
     return _make
 

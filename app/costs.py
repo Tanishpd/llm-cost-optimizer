@@ -82,6 +82,19 @@ def micro_to_usd(micro: int) -> Decimal:
     return (Decimal(micro) / MICRO).quantize(USD_PLACES, rounding=ROUND_HALF_UP)
 
 
+def usd_to_micro(usd: Decimal | str | int | float) -> int:
+    """Decimal USD -> integer micro-USD, the inverse of `micro_to_usd`.
+
+    Accepts `float` for convenience at the config edge, where a budget may
+    arrive as JSON, but converts via `str` so a value like `0.1` becomes
+    exactly 100000 rather than 99999 — `Decimal(0.1)` is the binary expansion,
+    and this function's output is compared against accumulated spend.
+    """
+    if isinstance(usd, float):
+        usd = Decimal(str(usd))
+    return int((Decimal(usd) * MICRO).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
 @dataclass(frozen=True)
 class CostBreakdown:
     """What lands in the `x_hlr` block (docs/API.md)."""

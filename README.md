@@ -3,10 +3,12 @@
 An API gateway that sits in front of several models of escalating cost and decides — per request —
 the cheapest one that will actually do the job.
 
-> **Status: M0–M11 complete. The gateway runs, and it's hardened.**
+> **Status: M0–M12 complete. The gateway runs, and it's hardened.**
 > All five tiers, both confidence gates, the eval harness and the dashboard are built and working —
-> **635 unit tests** (hermetic, no network) plus 9 integration tests against live models. Auth, rate
-> limiting, circuit breakers, structured logging and a container image are in. Run
+> **685 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
+> rate
+> limiting, per-tenant budgets, a durable audit trail, circuit breakers, structured
+> logging and a container image are in. Run
 > `python3 scripts/demo.py` to walk every tier in one go.
 >
 > The one honest caveat: **the gateway ships in `raw` confidence mode, not `calibrated`.** M6 fitted
@@ -324,6 +326,57 @@ The rate-limit window lives in a Redis sorted set behind a Lua script, so the ca
 workers rather than multiplied by them. If Redis is unreachable it degrades to per-process counting
 and says so in `/healthz` ([D18](docs/DECISIONS.md)).
 
+### Tenants and budgets
+
+A key authenticates; a **tenant** pays. Set `TENANTS` and each account gets its own daily cap and its
+own line in `/metrics`:
+
+```bash
+GATEWAY_API_KEYS=sk-acme-1,sk-globex-1
+TENANTS='{"acme":   {"keys": ["sk-acme-1"],   "daily_budget_usd": "5.00"},
+          "globex": {"keys": ["sk-globex-1"], "daily_budget_usd": "1.00"}}'
+```
+
+**Over budget degrades, it does not reject** — and that is the whole point. If most prompts don't
+need the expensive model, then running out of money for the expensive model shouldn't stop you being
+served. The frontier drops out of the cascade and the local tiers carry on:
+
+```
+tier      local_large
+path      ['local_large']
+degraded  ['budget_exhausted:acme']
+reason    daily budget exhausted: $0.000628 of $0.000500 spent today (UTC);
+          frontier tier withheld, so: served by local_large: confidence 0.78 …
+```
+
+It also makes the cap safe to set aggressively: if exhaustion meant 402s you'd set it high enough
+never to bind, which defeats the point ([D23](docs/DECISIONS.md)).
+
+Two things stated rather than glossed. **The cap is approximate by exactly one request** — cost isn't
+knowable until the provider replies, so the budget is read before the call and recorded after; the
+overshoot is bounded by `MAX_OUTPUT_TOKENS × FRONTIER_PRICE_OUT`, ~$0.04 at the defaults, and startup
+logs the number. **If Redis is down, budgets aren't enforced** — failing closed would turn a cache
+blip into a total frontier outage, so it fails open and says so in four places
+([D24](docs/DECISIONS.md), [D25](docs/DECISIONS.md)).
+
+### Audit trail
+
+One JSON line per request in `AUDIT_PATH`, **including refusals**, durable across restarts:
+
+```json
+{"ts": 1785258422.7, "trace_id": "b6ee310fb7af", "tenant": "acme", "principal": "777a832b78f0",
+ "tier": "local_large", "path": ["local_large"], "cost_micro_usd": 0,
+ "degraded": ["budget_exhausted:acme"], "gates": [...]}
+```
+
+This is the thing `/metrics/recent` can't be: that reads a Redis stream capped at 10k entries and
+answers *what is happening now*. This answers *why did request `abc123` cost $0.04 last Tuesday*.
+
+`principal` is a digest — the raw key is never written. Writes are queued and drained by a background
+task so the request path never waits on a disk; a full queue drops rather than blocking, and
+`/healthz` reports the count, because a trail with unreported holes is worse than no trail
+([D26](docs/DECISIONS.md)).
+
 ### Health
 
 | | Answers | Use for |
@@ -378,7 +431,7 @@ from exactly-summed integer token counters.
 
 ## Milestones
 
-Twelve milestones, each independently runnable. M0 came first deliberately: it resolves the one
+Thirteen milestones, each independently runnable. M0 came first deliberately: it resolves the one
 assumption everything else rests on, before anything is built on top of it.
 
 | | Milestone | State |
@@ -395,10 +448,11 @@ assumption everything else rests on, before anything is built on top of it.
 | **M9** | Auth, request limits, CI | **done** |
 | **M10** | Multi-worker, breakers, container, load test | **done** |
 | **M11** | Streaming, by buffering first | **done** — reverses D8 |
+| **M12** | Tenancy, budgets, durable audit trail | **done** |
 
 ```
 $ .venv/bin/python -m pytest -q -m "not integration"
-635 passed, 9 deselected in 1.77s
+685 passed, 10 deselected in 7.33s
 
 $ .venv/bin/python scripts/preflight.py
   ✓ python 3.14.6   ✓ venv   ✓ disk 34.1 GB free   ! swap 87%
@@ -408,10 +462,10 @@ $ .venv/bin/python scripts/preflight.py
   ✓ redis reachable, no modules (brute-force cosine, as designed)
 
 $ .venv/bin/python scripts/check_docs.py
-  all 107 checks passed
+  all 123 checks passed
 ```
 
-The 9 integration tests need a live Ollama — one also needs the `openai` SDK, because a
+The 10 integration tests need a live Ollama — one also needs the `openai` SDK, because a
 compatibility claim is worth checking against the client that actually makes it. They are deselected
 in CI; the unit suite is hermetic and is re-run behind a dead proxy to keep it that way.
 

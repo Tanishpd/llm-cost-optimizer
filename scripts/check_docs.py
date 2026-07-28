@@ -132,7 +132,10 @@ def check_no_stale_status() -> None:
                    # like "returns 400", which a history note may legitimately
                    # quote when describing what D8 used to say.
                    "unsupported_streaming",
-                   "No streaming."):
+                   "No streaming.",
+                   # M12 shipped tenancy and the audit trail.
+                   "No tenancy.", "No persistent audit log.",
+                   "no per-tenant budgets"):
         check(f"no stale status claim: {phrase!r}", phrase.lower() not in corpus)
 
 
@@ -157,6 +160,42 @@ def check_streaming_is_not_oversold() -> None:
         ))
         check(f"{name} does not oversell streaming", "stream" not in flat or caveat,
               "say plainly that TTFB is unchanged")
+
+
+def check_budget_caveats_are_stated() -> None:
+    """Two things about budgets must never be quietly dropped from the docs.
+
+    A spend cap that is *approximate* and *fails open* is fine — both are
+    defensible trades (D24, D25). What would not be fine is documenting the
+    feature without them, because a reader would then reasonably believe the
+    cap is exact and always applied. Neither is true.
+    """
+    for name in ("README.md", "docs/API.md"):
+        flat = re.sub(r"\s+", " ", (ROOT / name).read_text().replace("*", "")).lower()
+        if "daily_budget" not in flat and "budget" not in flat:
+            continue
+        check(f"{name} states the budget overshoot bound",
+              "overshoot" in flat or "approximate by" in flat,
+              "the cap is exceeded by up to one request; say so")
+        check(f"{name} states that budgets fail open without Redis",
+              "not enforced" in flat or "fails open" in flat,
+              "a reader would otherwise assume the cap always applies")
+
+
+def check_audit_is_not_confused_with_telemetry() -> None:
+    """They answer different questions and the docs must keep them apart.
+
+    "We have an audit log" plus "we have /metrics/recent" reads as duplication
+    unless the distinction is written down, and the first person to
+    consolidate them would delete the durable one.
+    """
+    for name in ("README.md", "docs/API.md", "docs/DECISIONS.md"):
+        flat = re.sub(r"\s+", " ", (ROOT / name).read_text()).lower()
+        if "audit" not in flat:
+            continue
+        check(f"{name} distinguishes the audit trail from telemetry",
+              "capped" in flat or "10k" in flat or "survives restart" in flat,
+              "say what telemetry cannot do that this does")
 
 
 def check_milestones_are_not_still_pending() -> None:
@@ -255,7 +294,7 @@ def check_promised_files_exist() -> None:
                 "scripts/demo.py", "scripts/loadtest.py", "static/dashboard.html",
                 "mock_frontier/main.py", "Dockerfile", "docker-compose.yml",
                 "app/resilience.py", "app/ratelimit.py", "app/logging_setup.py",
-                "app/streaming.py"):
+                "app/streaming.py", "app/budgets.py", "app/audit.py"):
         check(f"{rel} exists", (ROOT / rel).exists())
 
 
@@ -281,6 +320,8 @@ def main() -> int:
     check_milestones_are_current()
     check_milestones_are_not_still_pending()
     check_streaming_is_not_oversold()
+    check_budget_caveats_are_stated()
+    check_audit_is_not_confused_with_telemetry()
 
     print()
     if failures:

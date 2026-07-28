@@ -126,6 +126,21 @@ class RouterRecord(BaseModel):
     features: dict[str, Any] = Field(default_factory=dict)
 
 
+class BudgetRecord(BaseModel):
+    """Who paid for this request, and what is left of today's cap.
+
+    `enforced` is false when no cap is set *or* when Redis was unreachable, so
+    a caller can tell "within budget" from "budget could not be checked" —
+    those are different facts and collapsing them would hide an outage.
+    """
+
+    tenant: str = "anonymous"
+    spent_usd: float = 0.0
+    limit_usd: float | None = None       # null = unlimited
+    remaining_usd: float | None = None   # null = unlimited
+    enforced: bool = False
+
+
 class CacheRecord(BaseModel):
     exact_checked: bool = False
     exact_hit: bool = False
@@ -160,6 +175,10 @@ class HlrMetadata(BaseModel):
     cost_usd: float = 0.0
     baseline_cost_usd: float = 0.0
     cost_saved_usd: float = 0.0
+    # Who paid, and what was left. Null when no budget is configured, which is
+    # the shipped default — the field is always present so a client can tell
+    # "unlimited" from "this build has no budgets" by looking at `tenant`.
+    budget: BudgetRecord | None = None
     # Non-fatal dependency failures, e.g. ["redis_unavailable"]. Empty when healthy.
     degraded: list[str] = Field(default_factory=list)
 
