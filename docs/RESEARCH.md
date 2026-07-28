@@ -311,6 +311,44 @@ would survive the change untouched.
 
 ---
 
+### 3.3 Measured: which cache guard actually does the work (M5, 2026-07-28)
+
+`nomic-embed-text`, symmetric `search_query:` prefix on both sides, cosine after
+unit-normalization:
+
+| Pair | Cosine | Outcome at threshold 0.95 |
+|---|---|---|
+| *capital of France?* / *capital city of France?* | 0.9889 | ✅ hit |
+| *reverse a list in Python?* / *how can I reverse a list…* | 0.9979 | ✅ hit |
+| *Tell me France's capital.* / *Name the capital of France.* | 0.8460 | ❌ miss — a real paraphrase, lost |
+| *Summarize this article.* / *Give me a summary…* | 0.9014 | ❌ miss — a real paraphrase, lost |
+| **capital of Australia / Austria** | **0.7938** | below threshold; cosine alone catches it |
+| **convert 50 USD / 70 USD** | **0.7984** | below threshold; cosine alone catches it |
+| **Who founded Google / Microsoft** | **0.8028** | below threshold; cosine alone catches it |
+| **Is this API safe / not safe** | **0.9831** | **above threshold — only the negation guard stops it** |
+
+Two findings, both revising expectations set during design:
+
+1. **Negation is the guard that earns its place.** The entity and number
+   near-misses the docs treat as the canonical dangers score 0.79–0.80 with this
+   embedder — the threshold alone rejects them. But *"is this API safe"* vs
+   *"is this API **not** safe"* scores **0.9831**. The embedder cannot represent
+   the negation, and without `negation_mismatch` the gateway would serve the
+   opposite answer, instantly and for free. The entity and number guards stay:
+   they cost microseconds, and a weaker embedder would not be as kind.
+
+2. **0.95 is conservative enough to lose real paraphrases** (0.846, 0.901). That
+   is the intended direction — a miss costs ~120 ms, a false hit costs
+   correctness — but the semantic tier's hit rate will be lower than the design
+   assumed. M6 should sweep this threshold against a measured false-hit rate
+   rather than leaving 0.95 asserted.
+
+Known residual risk, unguarded and documented: *convert USD to EUR* vs *convert
+EUR to USD* shares numbers, entities and negation. Catching argument-order swaps
+needs parsing, not lexical sets.
+
+---
+
 ## 4. Redis: no vector index today, but an upgrade path exists
 
 **Installed Redis 7.2.7 has no modules.** No `FT.CREATE`, no `FT.SEARCH`, no RedisJSON, no vector

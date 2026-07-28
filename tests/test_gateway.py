@@ -609,11 +609,20 @@ def test_telemetry_failure_does_not_fail_the_request(client_factory, live_cache)
 
 @pytest.mark.integration
 def test_live_end_to_end():
-    """Full stack: real lifespan, real Ollama, real cost accounting."""
+    """Full stack: real lifespan, real Ollama, real cost accounting.
+
+    The prompt carries a nonce because this test shares Redis with whatever
+    else has run — without it, a leftover entry turns the assertion into
+    `cache_exact` and the test measures the wrong thing.
+    """
+    import uuid as _uuid
+
+    nonce = _uuid.uuid4().hex[:8]
     with TestClient(app) as c:
         r = c.post("/v1/chat/completions", json={
             "model": "gateway:small",
-            "messages": [{"role": "user", "content": "What is the capital of France? One word."}],
+            "messages": [{"role": "user",
+                          "content": f"What is the capital of France? One word. (probe {nonce})"}],
             "max_tokens": 10,
         })
     assert r.status_code == 200
