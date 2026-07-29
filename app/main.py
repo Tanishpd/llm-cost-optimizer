@@ -32,7 +32,7 @@ from fastapi.responses import (
 )
 from redis.asyncio import Redis
 
-from app import prometheus
+from app import __version__, prometheus
 from app.audit import AuditLog, audit_entry
 from app.budgets import (
     BudgetLedger,
@@ -274,7 +274,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="LLM Cost Optimizer",
     description="Routes each prompt to the cheapest model tier that can answer it.",
-    version="0.1.0",
+    version=__version__,
     lifespan=lifespan,
 )
 

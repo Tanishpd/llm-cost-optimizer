@@ -60,6 +60,21 @@ jobs:
           http_proxy: http://127.0.0.1:9
           https_proxy: http://127.0.0.1:9
 
+  # Pinned dependencies are only safe if something checks them for known
+  # vulnerabilities — a pin freezes a CVE in place just as well as it freezes a
+  # working version.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: pip install pip-audit
+      - name: Known vulnerabilities
+        run: pip-audit --requirement requirements.txt --strict --progress-spinner off
+
   lint:
     runs-on: ubuntu-latest
     steps:

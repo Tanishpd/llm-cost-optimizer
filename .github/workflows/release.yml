@@ -1,0 +1,107 @@
+# Cut a release from a tag.
+#
+#   git tag -a v0.2.0 -m "..." && git push origin v0.2.0
+#
+# A Dockerfile that only ever builds in CI is not a release path: there is
+# nothing to deploy and nothing to roll back to. This publishes an immutable,
+# digest-addressed image per tag, which is what makes "roll back" a real
+# instruction rather than "check out the old commit and rebuild".
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  verify:
+    # The tag must pass the same gate as a PR. Tagging a broken commit is
+    # exactly the moment you would rather find out.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.14", cache: pip}
+      - run: pip install -r requirements-dev.txt
+      - run: pytest -m "not integration" -q
+      - run: python scripts/check_docs.py
+
+      - name: The tag must match app/__init__.py
+        # A release whose image reports a different version than its tag is a
+        # debugging session waiting to happen.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(python -c "from app import __version__; print(__version__)")
+          echo "tag=$tag package=$pkg"
+          test "$tag" = "$pkg" || {
+            echo "tag $tag does not match app/__init__.py $pkg"; exit 1; }
+
+  image:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ghcr.io/${{ github.repository }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+
+      - name: Record the digest
+        # The digest, not the tag, is what a rollback pins to: `latest` moves
+        # and a tag can be re-pushed, a digest cannot.
+        run: |
+          echo "### Image" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  release:
+    needs: image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Notes come from CHANGELOG.md rather than generated commit titles:
+          # a human wrote down what changed and why, and that is worth more
+          # than a list of subject lines.
+          #
+          # Matched to the tag, not "the first section" — the first section is
+          # [Unreleased], and shipping that as release notes would publish an
+          # empty page.
+          ver="${GITHUB_REF_NAME#v}"
+          awk -v ver="$ver" '
+            $0 ~ "^## \\[" ver "\\]" {seen=1; print; next}
+            seen && /^## \[/ {exit}
+            seen {print}
+          ' CHANGELOG.md > /tmp/notes.md
+
+          if [ ! -s /tmp/notes.md ]; then
+            echo "CHANGELOG.md has no section for [$ver] — write the notes before tagging"
+            exit 1
+          fi
+
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file /tmp/notes.md

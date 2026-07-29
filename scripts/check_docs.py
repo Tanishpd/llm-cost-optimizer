@@ -245,6 +245,45 @@ def check_request_defaults_match_config() -> None:
                   str(value) in row.group(0))
 
 
+def check_version_is_single_sourced() -> None:
+    """`app/__init__.py` is the version; everything else must agree.
+
+    It was hardcoded in pyproject.toml *and* in the FastAPI constructor, which
+    is how a release ends up reporting a version it is not. The release
+    workflow refuses a tag that disagrees; this catches the disagreement
+    earlier, on the PR that introduced it.
+    """
+    sys.path.insert(0, str(ROOT))
+    from app import __version__
+
+    pyproject = (ROOT / "pyproject.toml").read_text()
+    m = re.search(r'^version = "([^"]+)"', pyproject, re.M)
+    check("pyproject.toml declares a version", m is not None)
+    if m:
+        check(f"pyproject.toml version matches app/__init__.py ({__version__})",
+              m.group(1) == __version__, f"pyproject says {m.group(1)}")
+
+    check("app/main.py does not hardcode a version",
+          'version="0.' not in (ROOT / "app/main.py").read_text(),
+          "use `version=__version__`")
+
+    changelog = (ROOT / "CHANGELOG.md").read_text()
+    check(f"CHANGELOG.md has a section for {__version__}",
+          f"[{__version__}]" in changelog,
+          "a release with no notes is a release nobody can review")
+
+
+def check_runbook_covers_the_alertable_signals() -> None:
+    """Every signal the docs tell you to alert on must have an entry saying
+    what to do about it. An alert with no runbook entry is a page at 3am with
+    no next step."""
+    runbook = (ROOT / "docs/RUNBOOK.md").read_text()
+    for signal in ("hlr_budgets_enforced", "hlr_audit_dropped_total",
+                   "hlr_circuit_state", "spend_ceiling_reached",
+                   "budget_exhausted", "all_tiers_down"):
+        check(f"RUNBOOK covers {signal}", signal in runbook)
+
+
 def check_endpoints_documented() -> None:
     """Every route the app serves must appear in API.md.
 
@@ -327,7 +366,8 @@ def check_promised_files_exist() -> None:
                 "mock_frontier/main.py", "Dockerfile", "docker-compose.yml",
                 "app/resilience.py", "app/ratelimit.py", "app/logging_setup.py",
                 "app/streaming.py", "app/budgets.py", "app/audit.py",
-                "app/prometheus.py"):
+                "app/prometheus.py", "CHANGELOG.md", "docs/RUNBOOK.md",
+                ".github/dependabot.yml", ".github/workflows/release.yml"):
         check(f"{rel} exists", (ROOT / rel).exists())
 
 
@@ -346,6 +386,8 @@ def main() -> int:
     check_no_stale_status()
     check_promised_files_exist()
     check_dashboard_is_self_contained()
+    check_version_is_single_sourced()
+    check_runbook_covers_the_alertable_signals()
     check_request_defaults_match_config()
     check_endpoints_documented()
     check_middleware_limits_documented()
