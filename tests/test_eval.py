@@ -978,3 +978,136 @@ async def test_the_eval_passes_reasoning_effort_to_the_judge_only_when_configure
 
     assert judge.efforts == ["none", "none"], "the judge must get it"
     assert frontier.efforts == [""], "the reference must not — it is the gold standard"
+
+
+# --------------------------------------------------------------------------
+# the eval's own spend ceiling
+#
+# MAX_DAILY_SPEND_USD lives in BudgetLedger, on the gateway's request path.
+# run_eval calls the provider directly and never touches it, so the one
+# component that deliberately spends real money had no cap on it at all.
+# --------------------------------------------------------------------------
+
+
+def _tracker(ceiling="5.00"):
+    from decimal import Decimal
+
+    from eval.run_eval import SpendTracker
+
+    return SpendTracker(Decimal(ceiling), {
+        "reference": (Decimal("0.50"), Decimal("3.00")),
+        "judge": (Decimal("0.30"), Decimal("2.50")),
+    })
+
+
+def test_the_ceiling_ships_armed():
+    """D27: a business policy may default to off, a safety limit may not."""
+    from decimal import Decimal
+
+    from app.config import Settings
+
+    assert Settings(_env_file=None).eval_max_spend_usd == Decimal("5.00")
+    assert _tracker().armed is True
+
+
+def test_it_can_be_disarmed_explicitly():
+    assert _tracker("0").armed is False
+    _tracker("0").check()          # never raises, however much is spent
+
+
+def test_spend_accumulates_from_provider_reported_tokens():
+    from eval.run_eval import ApiUsage
+
+    t = _tracker()
+    t.add(ApiUsage("reference", "m", 1_000_000, 0))          # 1M in  @ $0.50
+    t.add(ApiUsage("judge", "m", 0, 1_000_000))              # 1M out @ $2.50
+    assert float(t.spent) == pytest.approx(3.00)
+
+
+def test_thinking_tokens_count_toward_the_ceiling():
+    """They are billed as output. A ceiling that ignored them would be wrong by
+    36% on the measured run, in the direction that costs money."""
+    from eval.run_eval import ApiUsage
+
+    t = _tracker()
+    t.add(ApiUsage("reference", "m", 0, 1_000, tokens_total=101_000))
+    # billable output is total - input = 101,000, not the 1,000 visible.
+    assert float(t.spent) == pytest.approx(101_000 / 1e6 * 3.00)
+
+
+def test_it_binds_before_the_call_not_after():
+    """A ceiling that notices only once it has been crossed is a report."""
+    from eval.run_eval import ApiUsage, SpendCeilingReached
+
+    t = _tracker("1.00")
+    t.check()                                                 # nothing spent yet
+    t.add(ApiUsage("judge", "m", 0, 1_000_000))               # $2.50, over
+    with pytest.raises(SpendCeilingReached, match="EVAL_MAX_SPEND_USD"):
+        t.check()
+
+
+def test_a_normal_run_never_approaches_it():
+    """The measured full run is $0.1139 against a $5.00 ceiling — ~45x
+    headroom, so this must not fire in ordinary use."""
+    import json
+    from decimal import Decimal
+    from pathlib import Path
+
+    from eval.run_eval import SpendTracker, load_cached
+
+    root = Path(__file__).resolve().parent.parent
+    prices = {"reference": (Decimal("0.50"), Decimal("3.00")),
+              "judge": (Decimal("0.30"), Decimal("2.50"))}
+    t = SpendTracker(json.loads((root / "eval/calibrator.json").read_text())
+                     and Decimal("5.00"), prices)
+    for r in load_cached("full").values():
+        for u in r.usage:
+            t.add(u)
+    assert float(t.spent) == pytest.approx(0.1139, abs=0.001)
+    t.check()   # must not raise on a real, complete run
+
+
+async def test_the_ceiling_actually_stops_a_run(tmp_path, monkeypatch):
+    """Through the real `collect`, not just the tracker.
+
+    The tracker being correct is worth nothing if nothing consults it — the
+    same class of gap as a setting wired to no code, which is why
+    tests/test_wiring.py exists.
+    """
+    from decimal import Decimal
+
+    from app.providers.base import Completion
+    from eval import run_eval as ev
+    from eval.dataset import DATASET
+
+    monkeypatch.setattr(ev, "RUNS_DIR", tmp_path)
+
+    class FakeOllama:
+        def __init__(self, client): pass
+        async def chat(self, **kw):
+            return Completion(content="a", model="m", tokens_in=1, tokens_out=1,
+                              logprobs=[{"logprob": -0.2}])
+
+    class Pricey:
+        def __init__(self, reply): self.reply, self.calls = reply, 0
+        async def chat(self, **kw):
+            self.calls += 1
+            # 1M output tokens per call: one call blows a $1 ceiling.
+            return Completion(content=self.reply, model="m", tokens_in=0,
+                              tokens_out=1_000_000, raw={"usage": {}})
+
+    monkeypatch.setattr(ev, "OllamaProvider", FakeOllama)
+    frontier, judge = Pricey("ref"), Pricey("ACCEPTABLE")
+    judged = [p for p in DATASET if p.grade != "auto"][:4]
+    spend = ev.SpendTracker(Decimal("1.00"), {
+        "reference": (Decimal("0"), Decimal("3.00")),
+        "judge": (Decimal("0"), Decimal("2.50"))})
+
+    with pytest.raises(ev.SpendCeilingReached):
+        await ev.collect(judged, tag="t", small_model="s", large_model="l",
+                         max_tokens=512, use_real_frontier=True, frontier=frontier,
+                         judge=judge, judge_model="j", frontier_model="f", spend=spend)
+
+    assert frontier.calls < len(judged), "it kept spending after the ceiling bound"
+    # And whatever was collected before it bound is on disk, not discarded.
+    assert ev.load_cached("t"), "progress was not checkpointed"

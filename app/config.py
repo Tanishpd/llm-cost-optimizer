@@ -142,6 +142,22 @@ class Settings(BaseSettings):
     # provider's current rates before believing any total.
     eval_judge_price_in: Decimal = Decimal("2.50")
     eval_judge_price_out: Decimal = Decimal("10.00")
+    # A ceiling on ONE eval run, and it ships ARMED for the same reason
+    # `MAX_DAILY_SPEND_USD` does (D27): a business policy may default to off, a
+    # safety limit may not.
+    #
+    # That ceiling lives in `BudgetLedger`, on the gateway's request path.
+    # `eval/run_eval.py` calls the provider directly and never touches it — so
+    # the one component that deliberately spends real money was the one with no
+    # cap on it. A fixed 110-prompt dataset and a response cache make a runaway
+    # unlikely, not impossible: a retry loop, a larger dataset or a `--repeat`
+    # flag would each have had nothing standing in the way.
+    #
+    # Headroom depends on the configured prices: the same measured run is
+    # $0.47 at the placeholder defaults (11x) and $0.11 at verified Gemini
+    # rates (45x). Either way it should never bind in normal use; when it
+    # does, something is wrong.
+    eval_max_spend_usd: Decimal = Decimal("5.00")
     # OpenAI's `reasoning_effort`, passed through when non-empty.
     #
     # Empty by default and it must stay that way: the field is standard but its

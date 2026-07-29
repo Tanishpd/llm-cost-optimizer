@@ -146,6 +146,37 @@ def save_cached(tag: str, results: dict[str, PromptResult]) -> None:
     )
 
 
+class SpendTracker:
+    """What this run has spent so far, and whether it may spend more.
+
+    Checked *before* each call rather than after, because a ceiling that only
+    notices once it has been crossed is a report rather than a limit. The same
+    reasoning as the gateway's budget check, and it inherits the same
+    imprecision: cost is not knowable until the provider replies, so the run
+    can exceed the ceiling by at most one call.
+    """
+
+    def __init__(self, ceiling_usd: Decimal,
+                 prices: dict[str, tuple[Decimal, Decimal]]) -> None:
+        self._ceiling = ceiling_usd
+        self._prices = prices
+        self.spent = Decimal(0)
+
+    @property
+    def armed(self) -> bool:
+        return self._ceiling > 0
+
+    def add(self, usage: ApiUsage) -> None:
+        price_in, price_out = self._prices.get(usage.kind, (Decimal(0), Decimal(0)))
+        self.spent += (_money(usage.tokens_in, price_in)
+                       + _money(billable_out(usage), price_out))
+
+    def check(self) -> None:
+        if self.armed and self.spent >= self._ceiling:
+            raise SpendCeilingReached(
+                f"EVAL_MAX_SPEND_USD reached: ${self.spent:.4f} of ${self._ceiling}")
+
+
 def usage_of(kind: str, model: str, completion) -> ApiUsage:
     """Pull one paid call's accounting off a Completion, keeping the provider's
     own usage block for whatever it reports beyond the two standard counts."""
@@ -359,6 +390,7 @@ async def collect(
     call_interval: float = 0.0,
     judge_reasoning_effort: str = "",
     reference_reasoning_effort: str = "",
+    spend: SpendTracker | None = None,
 ) -> dict[str, PromptResult]:
     cached = load_cached(tag)
     check_budget(cached, max_tokens, tag)
@@ -388,6 +420,10 @@ async def collect(
                     result.label_source[tier] = "auto"
                     result.label_reason[tier] = g.reason
             elif use_real_frontier and frontier is not None and judge is not None:
+                # Before the call, not after: a ceiling that notices only once
+                # it has been crossed is a report, not a limit.
+                if spend is not None:
+                    spend.check()
                 await paced(call_interval)
                 ref = await with_retry(
                     # Bound as defaults, not captured: the lambda is called
@@ -403,7 +439,10 @@ async def collect(
                     ),
                     what=f"{p.id} reference",
                 )
-                result.usage.append(usage_of("reference", frontier_model, ref))
+                usage = usage_of("reference", frontier_model, ref)
+                result.usage.append(usage)
+                if spend is not None:
+                    spend.add(usage)
                 if ref.finish_reason == "length":
                     # A truncated reference is worse than no reference: the
                     # judge compares against a fragment and the label looks
@@ -427,7 +466,10 @@ async def collect(
                         ),
                         what=f"{p.id} judge/{tier}",
                     )
-                    result.usage.append(usage_of("judge", judge_model, verdict))
+                    usage = usage_of("judge", judge_model, verdict)
+                    result.usage.append(usage)
+                    if spend is not None:
+                        spend.add(usage)
                     g = parse_judge(verdict.content)
                     if g is None:
                         # A judge that returns nothing produces no labels, and
@@ -462,6 +504,16 @@ async def collect(
             save_cached(tag, results)  # checkpoint after every prompt
 
     return results
+
+
+class SpendCeilingReached(RuntimeError):
+    """`EVAL_MAX_SPEND_USD` bound mid-run.
+
+    Mirrors `DailyQuotaExhausted` deliberately: both mean "stop calling the
+    API, keep what you have". Everything collected so far is already
+    checkpointed, so the caller fits on it rather than discarding a partial
+    run that cost real money to produce.
+    """
 
 
 class DailyQuotaExhausted(RuntimeError):
@@ -612,6 +664,15 @@ async def main() -> int:
           f"local max_tokens={max_tokens}")
     print(f"cache:   eval/runs/{tag}.json\n")
 
+    # Armed by default (D27: a safety limit may not default to off). The
+    # gateway's MAX_DAILY_SPEND_USD lives in BudgetLedger on the request path,
+    # which this script never touches — so without this the one component that
+    # deliberately spends money had no cap at all.
+    spend = SpendTracker(settings.eval_max_spend_usd, {
+        "reference": (settings.frontier_price_in, settings.frontier_price_out),
+        "judge": (settings.eval_judge_price_in, settings.eval_judge_price_out),
+    })
+
     frontier = judge = None
     client = None
     if use_real and not args.fit_only:
@@ -646,6 +707,13 @@ async def main() -> int:
         frontier = FrontierProvider(client, base_url=base, api_key=key)
         judge = FrontierProvider(client, base_url=judge_base, api_key=judge_key)
 
+        if spend.armed:
+            print(f"  ceiling:  ${settings.eval_max_spend_usd} for this run "
+                  f"(EVAL_MAX_SPEND_USD)")
+        else:
+            print("  ceiling:  DISARMED (EVAL_MAX_SPEND_USD=0) — this run has no "
+                  "spend limit")
+
     try:
         started = time.perf_counter()
         results = {}
@@ -666,7 +734,17 @@ async def main() -> int:
             call_interval=settings.eval_min_call_interval_s,
             judge_reasoning_effort=settings.eval_judge_reasoning_effort,
             reference_reasoning_effort=settings.eval_reference_reasoning_effort,
+            spend=spend,
         )
+        except SpendCeilingReached as exc:
+            # Same shutdown as a daily quota: everything so far is checkpointed,
+            # so fit on it rather than discard a partial run that cost money.
+            results = load_cached(tag)
+            print(f"\n  SPEND CEILING REACHED after {len(results)}/{len(DATASET)} prompts.")
+            print(f"  {exc}")
+            print("  Progress is saved. Raise EVAL_MAX_SPEND_USD to continue, or")
+            print("  re-run to resume from the cache — nothing is paid for twice.")
+            print("  Fitting on what has been collected so far:\n")
         except DailyQuotaExhausted as exc:
             # A per-day quota is not worth waiting out, and every prompt
             # completed so far is already on disk. Reload and fit what we have

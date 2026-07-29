@@ -284,6 +284,14 @@ Every API response is cached to `eval/runs/*.json`; **always reuse that cache wh
 calibrators.** Never re-spend to recompute something already on disk, and never enable the real
 frontier for serving — only eval.
 
+**The harness has its own spend ceiling, and it ships armed.** `MAX_DAILY_SPEND_USD` lives in
+`BudgetLedger` on the gateway's request path; `run_eval.py` calls the provider directly and never
+touches it, so the one component that deliberately spends real money had no cap at all.
+`EVAL_MAX_SPEND_USD` (default $5; a full run measures $0.47 at the placeholder prices, $0.11 at
+verified Gemini rates) is checked **before** each paid call — a ceiling that notices only once it has been crossed is a report, not a limit. When it
+binds, the run stops the way a daily quota does: progress checkpointed, fit on what was collected.
+`0` disarms it and the run says so at startup.
+
 **The run reports what it spent** — `ApiUsage` per paid call, printed as a cost summary at the end.
 It reports a *range* when the provider reports thinking tokens, because whether `completion_tokens`
 already includes them is provider-specific and guessing wrong is a multiple, not a rounding error.
@@ -331,7 +339,7 @@ which is worse than shared but far better than none.
 
 **M0–M25 complete (2026-07-29).** The gateway runs and is hardened: all five tiers, both gates, eval
 harness, dashboard, auth, shared rate limiting, circuit breakers, structured logging, container
-image, streaming, per-tenant budgets and rate limits, a durable audit trail. **906 unit + 10 integration
+image, streaming, per-tenant budgets and rate limits, a durable audit trail. **913 unit + 10 integration
 tests** at 96% coverage, 208 doc-consistency checks. `python3 scripts/demo.py`
 walks every tier.
 

@@ -1170,7 +1170,7 @@ They all still passed. `REAL_LOGPROBS` scores `0.9725`, which clears `0.55` and
 `0.92` alike, so the suite was green by coincidence rather than because the
 gates behaved. Both factories now pin `confidence_mode="raw"` explicitly.
 
-906 unit tests, 208 doc checks.
+913 unit tests, 208 doc checks.
 
 ---
 
@@ -1219,6 +1219,7 @@ gates behaved. Both factories now pin `confidence_mode="raw"` explicitly.
 | `EVAL_JUDGE_MAX_TOKENS` | `64` | Eval only. A reasoning judge spends hidden thinking tokens against this; at 10 it returns nothing and every verdict parses as None |
 | `EVAL_REFERENCE_MAX_TOKENS` | `1024` | Eval only. Separate from the local tiers' budget — a truncated reference makes the judge compare against a fragment |
 | `EVAL_MIN_CALL_INTERVAL_S` | `0.0` | Eval only. Pace under a rate limit rather than retry through it; Gemini's free tier is 20/min |
+| `EVAL_MAX_SPEND_USD` | `5.00` | Eval only. Ceiling on **one run**, checked before each paid call. Ships armed (D27) — `MAX_DAILY_SPEND_USD` lives in `BudgetLedger` and does not cover the harness, which calls the provider directly. `0` disarms |
 | `EVAL_JUDGE_PRICE_IN` | `2.50` | Eval only. The judge is a different model from the reference (D11), so it bills at different rates. Placeholder — verify |
 | `EVAL_JUDGE_PRICE_OUT` | `10.00` | Eval only. As above. `run_eval` prints what a run cost from provider-reported tokens, at these prices |
 | `EVAL_JUDGE_REASONING_EFFORT` | *(empty)* | Eval only. Passed through when set. `none` disables thinking on gemini-2.5-flash; Gemini 3 has no off switch; Anthropic ignores the field. Empty by default or it would 400 against the default judge |

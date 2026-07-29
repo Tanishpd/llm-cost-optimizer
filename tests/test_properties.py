@@ -341,8 +341,22 @@ def test_escaping_is_reversible_for_printable_text(value):
     one raw is how a sample becomes two lines. That trade is asserted below.
     """
     escaped = escape_label_value(value)
-    restored = escaped.replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\")
-    assert restored == value
+    # Scan, do not chain `.replace()`. Hypothesis found this on a later run:
+    # the two-character value `\` + `n` escapes to `\\n`, and a naive
+    # `.replace("\\n", "\n")` matches the *second* backslash with the `n` and
+    # returns backslash + a real newline. Escaping was correct; the test's
+    # inverse was not — the same flaw this file already documents for
+    # `_parse_label_line` above, reintroduced twenty lines below it.
+    restored, i = [], 0
+    while i < len(escaped):
+        if escaped[i] == "\\":
+            assert i + 1 < len(escaped), "value ends inside an escape"
+            restored.append({"n": "\n", '"': '"', "\\": "\\"}[escaped[i + 1]])
+            i += 2
+            continue
+        restored.append(escaped[i])
+        i += 1
+    assert "".join(restored) == value
 
 
 @given(value=st.text(min_size=1, max_size=40,
