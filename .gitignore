@@ -38,3 +38,7 @@ htmlcov/
 
 # mutmut copies the tree here to mutate it.
 mutants/
+
+# hypothesis keeps a database of falsifying examples so a fixed bug stays
+# fixed. Local only -- CI regenerates it.
+.hypothesis/

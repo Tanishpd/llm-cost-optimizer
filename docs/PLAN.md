@@ -917,6 +917,61 @@ been told not to worry about. The bound is now `1 <= calls <= 2`.
 
 799 unit tests, 175 doc checks.
 
+### M20 — Property-based tests ✅ DONE (2026-07-29)
+
+The last entry on the "still not covered" list.
+
+Example-based tests assert what a function does for inputs someone thought of.
+These assert what must be true for inputs nobody thought of — the right
+instrument for the parts of this system that are *mathematical claims* rather
+than behaviour.
+
+The central one is `geo_mean`'s **length invariance**. The entire design rests
+on it (D3): sequence probability decays exponentially with length, so a fixed
+threshold against it measures length rather than certainty. That claim had been
+carried by two hand-picked examples and a docstring. It is now quantified over
+generated inputs — including the stronger form, that repeating a token sequence
+does not change the score — alongside the counter-claim that
+`sequence_probability` genuinely *does* decay, because a counter-example that
+stopped behaving as described would quietly stop making its point.
+
+**It found a real bug on the first run.** A carriage return in a Prometheus
+label value split one sample across two lines:
+
+    hlr_thing{label="
+    "} 1
+
+Two fragments, neither of which parses. `escape_label_value` handled the three
+escapes the format defines — backslash, quote, line feed — and nothing else.
+Tenant names come from operator JSON and tier names from config; neither is
+guaranteed tame.
+
+Fixed, and then **`\x85` (NEL, a C1 control) did the same thing** — which is
+the argument for enumerating the whole class of line terminators rather than
+the character that happened to fail. Python's `splitlines()` breaks on
+`\v \f \x1c \x1d \x1e \x85 \u2028 \u2029` as well as `\r\n`, and the escaper
+now replaces all of them.
+
+**Then it found two bugs in the test itself**, which is the same instrument
+doing the same job one level up:
+
+- the assertion counted quotes not preceded by a backslash, and reported
+  `label="\\"` — a valid value containing one backslash — as unbalanced;
+- the round-trip un-escaped with a chain of `.replace()` calls, which on the
+  two-character string `\n` (backslash, n) undoes `\n` before `\\` and
+  produces a real newline. Sequential replace on escape sequences is
+  order-dependent and wrong.
+
+The test now scans properly and compares against the contract directly.
+
+Property testing and mutation testing are complementary and neither replaces
+the other: mutation asks whether the existing assertions would catch a change,
+property testing asks whether the assertions cover the right inputs. This run
+is the evidence — mutation testing had already been over `prometheus.py` and
+found nothing here, because no assertion existed to mutate.
+
+823 unit tests, 179 doc checks.
+
 ---
 
 ## Configuration surface
