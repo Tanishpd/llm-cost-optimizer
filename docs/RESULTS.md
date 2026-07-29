@@ -177,19 +177,37 @@ Two details worth carrying away:
 
 ## 7. Latency, measured
 
-Via `/metrics` on the development machine. Small sample (n = 1–7 per tier) — read
-as orders of magnitude, not benchmarks.
+| tier | cost | p50 | p95 | median tokens out |
+|---|---|---|---|---|
+| exact cache | $0 | **0.2 ms** | 0.3 ms | 8 |
+| semantic cache | ~$0 | **47 ms** | 92 ms | 8 |
+| `qwen2.5:0.5b` | $0 | **312 ms** | 2.5 s | 8 |
+| `qwen2.5:3b` | $0 | **4.5 s** | 4.6 s | ~120 |
+| frontier (mock) | metered | **1.7 s** | 2.1 s | 91 |
 
-| tier | cost | p50 | p95 |
-|---|---|---|---|
-| exact cache | $0 | **0.2 ms** | 0.2 ms |
-| semantic cache | ~$0 | **40 ms** | 60 ms |
-| `qwen2.5:0.5b` | $0 | **506 ms** | 1.2 s |
-| `qwen2.5:3b` | $0 | **862 ms** | 2.2 s |
-| frontier | metered | **1.9 s** | 1.9 s |
+**Measured 2026-07-29** on an Apple M2 with 8 GB, from the gateway's own per-stage
+timings, models warm, `max_tokens=120`. n = 36 / 26 / 18 / 6 / 10.
 
-The frontier figure is the mock's configured `MOCK_LATENCY_MS`; a real provider
-will differ.
+**Read the last column before comparing rows.** These tiers are not answering the
+same question, and generation time is close to linear in output length — so this
+is not "what each tier costs for identical work". Measured directly against
+Ollama, same prompt, 120 tokens each:
+
+| model | tokens/sec | 120 tokens |
+|---|---|---|
+| `qwen2.5:0.5b` | **79.9** | 1.5 s |
+| `qwen2.5:3b` | **36.4** | 3.3 s |
+
+That accounts for the whole of the 3B's 4.5 s, and it is **not CPU load**:
+`ollama ps` reports all three models at **100% GPU**, and model load time was
+0.14–0.15 s, so nothing was cold-loading or swapping. A 3B is 2.2x slower per
+token than a 0.5B here — memory-bandwidth bound rather than compute bound, which
+is why the gap is 2.2x and not the 6x the parameter counts imply.
+
+An earlier version of this table read 862 ms for the 3B. At 36.4 tok/s that is a
+31-token answer: it was measured on much shorter outputs, not on a faster
+machine. The frontier figure is the mock's configured `MOCK_LATENCY_MS`; a real
+provider will differ.
 
 ---
 

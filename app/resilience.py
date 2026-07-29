@@ -40,6 +40,12 @@ class BreakerStats:
     opened_at: float = 0.0
     trips: int = 0
     short_circuited: int = 0
+    # Why it opened. Without this, an open circuit reports only that it is
+    # open: a 401 from a misconfigured key and a genuinely dead upstream are
+    # indistinguishable at the point an operator reads the error, and the one
+    # message that names the cause is the one that gets discarded.
+    last_error: str = ""
+    last_fix: str = ""
 
     def as_dict(self) -> dict:
         return {
@@ -106,10 +112,14 @@ class CircuitBreaker:
         s.state = "closed"
         s.consecutive_failures = 0
 
-    def record_failure(self, *, now: float | None = None) -> None:
+    def record_failure(self, *, now: float | None = None,
+                       error: BaseException | None = None) -> None:
         now = self._now() if now is None else now
         s = self._stats
         s.consecutive_failures += 1
+        if error is not None:
+            s.last_error = str(error)[:200]
+            s.last_fix = getattr(error, "fix", "") or ""
         if s.state == "half_open":
             # The probe failed — back to open, cooldown restarts.
             s.state = "open"
@@ -204,9 +214,16 @@ async def call_with_resilience[T](
     the whole value: a dead tier costs microseconds instead of a full timeout.
     """
     if not breaker.allows():
+        # Carry the original failure forward. "Circuit is open" alone tells an
+        # operator that something broke repeatedly, not what — and the useful
+        # half was already known: a 401 arrives with "Check FRONTIER_API_KEY",
+        # which used to be replaced by generic advice to check the tier.
+        cause = breaker.stats.last_error
         raise ProviderUnavailable(
-            f"{breaker.name} circuit is open after repeated failures; skipping",
-            fix=f"Check {breaker.name}; the circuit retries automatically after a cooldown.",
+            f"{breaker.name} circuit is open after repeated failures; skipping"
+            + (f" (last error: {cause})" if cause else ""),
+            fix=breaker.stats.last_fix
+            or f"Check {breaker.name}; the circuit retries automatically after a cooldown.",
         )
 
     last: ProviderError | None = None
@@ -217,7 +234,7 @@ async def call_with_resilience[T](
             return result
         except ProviderError as exc:
             last = exc
-            breaker.record_failure()
+            breaker.record_failure(error=exc)
             if attempt >= policy.attempts or not policy.should_retry(exc, billable=billable):
                 raise
             delay = policy.delay_for(attempt)

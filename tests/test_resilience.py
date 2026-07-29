@@ -252,3 +252,66 @@ async def test_repeated_failures_eventually_open_the_breaker():
         await call_with_resilience(
             always_fails, breaker=breaker, policy=RetryPolicy(attempts=1)
         )
+
+
+def test_an_open_circuit_reports_what_broke_it():
+    """"Circuit is open" alone says something failed repeatedly, not what.
+
+    A 401 from a misconfigured key and a genuinely dead upstream look
+    identical at the point an operator reads the error — and the message that
+    named the cause was the one being discarded. This cost real debugging
+    time: clearing FRONTIER_API_KEY made the local mock return 401, the
+    breaker opened, and the surfaced advice was "check frontier" rather than
+    "check FRONTIER_API_KEY", which the provider had already said.
+    """
+    import pytest
+
+    from app.providers.base import ProviderUnavailable
+    from app.resilience import CircuitBreaker
+
+    breaker = CircuitBreaker("frontier", failure_threshold=2, cooldown_s=60)
+    original = ProviderUnavailable("frontier rejected the API key (401)",
+                                   fix="Check FRONTIER_API_KEY")
+    for _ in range(2):
+        breaker.record_failure(error=original)
+
+    assert breaker.allows() is False
+    assert breaker.stats.last_error.startswith("frontier rejected the API key")
+    assert breaker.stats.last_fix == "Check FRONTIER_API_KEY"
+
+    async def never_called():  # pragma: no cover - the breaker short-circuits
+        raise AssertionError("the open circuit should not have called through")
+
+    from app.resilience import RetryPolicy, call_with_resilience
+
+    async def run():
+        return await call_with_resilience(
+            never_called, breaker=breaker, policy=RetryPolicy(attempts=1))
+
+    import asyncio
+    with pytest.raises(ProviderUnavailable) as exc:
+        asyncio.run(run())
+    assert "401" in str(exc.value), "the cause must survive the breaker"
+    assert exc.value.fix == "Check FRONTIER_API_KEY", "and so must the remedy"
+
+
+def test_a_breaker_with_no_recorded_cause_still_advises_something():
+    """Older call sites may not pass the error; the generic advice remains."""
+    import asyncio
+
+    import pytest
+
+    from app.providers.base import ProviderUnavailable
+    from app.resilience import CircuitBreaker, RetryPolicy, call_with_resilience
+
+    breaker = CircuitBreaker("ollama", failure_threshold=1, cooldown_s=60)
+    breaker.record_failure()
+    assert breaker.allows() is False
+
+    async def fn():  # pragma: no cover - short-circuited
+        return None
+
+    with pytest.raises(ProviderUnavailable) as exc:
+        asyncio.run(call_with_resilience(fn, breaker=breaker, policy=RetryPolicy(attempts=1)))
+    assert "circuit is open" in str(exc.value)
+    assert "retries automatically" in exc.value.fix

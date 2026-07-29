@@ -324,3 +324,31 @@ async def test_the_retry_hint_survives_a_verbose_429_body(mock_client):
     with pytest.raises(ProviderUnavailable) as exc:
         await provider.chat(model="m", messages=[{"role": "user", "content": "q"}])
     assert "retry in 23.695367191s" in str(exc.value)
+
+
+async def test_an_empty_api_key_is_not_reported_as_an_unreachable_upstream():
+    """`Authorization: Bearer ` is an illegal header, so httpx raises before
+    any connection is attempted — which lands in the RequestError branch and
+    advises starting a mock that is usually already running.
+
+    Diagnosed the slow way once: `curl` to the same URL returned 401, so the
+    mock looked like it was rejecting the key, when the gateway had in fact
+    never sent a request. Zero entries in the mock's access log.
+    """
+    import pytest
+
+    from app.providers.base import ProviderUnavailable
+    from app.providers.frontier import FrontierProvider
+
+    class NeverCalled:
+        async def post(self, *a, **k):  # pragma: no cover - must not be reached
+            raise AssertionError("no request should be attempted without a key")
+
+    for key in ("", "   "):
+        provider = FrontierProvider(NeverCalled(), base_url="http://localhost:8001/v1",
+                                    api_key=key)
+        with pytest.raises(ProviderUnavailable) as exc:
+            await provider.chat(model="m", messages=[{"role": "user", "content": "q"}])
+        assert "no API key" in str(exc.value)
+        assert "FRONTIER_API_KEY" in exc.value.fix
+        assert "unreachable" not in str(exc.value).lower(), "that sends you to the wrong fix"

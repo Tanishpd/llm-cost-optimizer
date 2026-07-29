@@ -5,7 +5,7 @@ the cheapest one that will actually do the job.
 
 > **Status: M0–M25 complete. The gateway runs, and it's hardened.**
 > All five tiers, both confidence gates, the eval harness and the dashboard are built and working —
-> **903 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
+> **906 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
 > rate
 > limiting, per-tenant budgets and rate limits, a durable audit trail, circuit breakers, structured
 > logging and a container image are in. Run
@@ -60,15 +60,17 @@ A request descends five tiers and stops at the first one that can serve it.
 
 | Tier | What it does | Cost | p50 | p95 |
 |---|---|---|---|---|
-| **Exact cache** | Hash of the normalized prompt + model + sampling params | $0 | **0.2 ms** | 0.2 ms |
-| **Semantic cache** | Embedding similarity — catches rewordings of a question you've already asked | ~$0 | **40 ms** | 60 ms |
-| **Small SLM** | `qwen2.5:0.5b`, with a confidence score from its logprobs | $0 | **506 ms** | 1.2 s |
-| **Large SLM** | `qwen2.5:3b`, same treatment — reached only when the 0.5B wasn't sure | $0 | **862 ms** | 2.2 s |
-| **Frontier** | Escalation over real HTTP to an OpenAI-shaped endpoint | metered | **1.9 s** | 1.9 s |
+| **Exact cache** | Hash of the normalized prompt + model + sampling params | $0 | **0.2 ms** | 0.3 ms |
+| **Semantic cache** | Embedding similarity — catches rewordings of a question you've already asked | ~$0 | **47 ms** | 92 ms |
+| **Small SLM** | `qwen2.5:0.5b`, with a confidence score from its logprobs | $0 | **312 ms** | 2.5 s |
+| **Large SLM** | `qwen2.5:3b`, same treatment — reached only when the 0.5B wasn't sure | $0 | **4.5 s** | 4.6 s |
+| **Frontier** | Escalation over real HTTP to an OpenAI-shaped endpoint | metered | **1.7 s** | 2.1 s |
 
-**Measured** on this machine via `/metrics`, not estimated — small sample (n = 1–7 per tier), so read
-them as orders of magnitude rather than benchmarks. The frontier figure is the mock's configured
-`MOCK_LATENCY_MS`; a real provider will differ.
+**Measured 2026-07-29** on an Apple M2 with 8 GB, models warm, `max_tokens=120`. These rows are *not*
+comparable as "cost per tier": the tiers answer different questions, and generation time is close to
+linear in output length. The 3B's 4.5 s is `36.4 tok/s × ~120 tokens` — **not CPU load**, since
+`ollama ps` reports 100% GPU and load time was 0.15 s. Full method and the per-model token rates:
+[docs/RESULTS.md](docs/RESULTS.md).
 
 Between the caches and the models, a **pre-router** looks at the prompt — length, code fences,
 reasoning markers, arithmetic, attached context — and picks where to *enter* the cascade:
@@ -238,7 +240,7 @@ Contributing? [CONTRIBUTING.md](CONTRIBUTING.md) has the loop these three
 commands belong to, and what CI will check that they do not.
 
 ```bash
-.venv/bin/python -m pytest -m "not integration"   # 903, hermetic — needs nothing running
+.venv/bin/python -m pytest -m "not integration"   # 906, hermetic — needs nothing running
 .venv/bin/ruff check app eval scripts mock_frontier tests
 .venv/bin/python scripts/check_docs.py            # 208 cross-document checks
 ```
@@ -249,7 +251,7 @@ suite had caught **one of fourteen**.
 
 | Layer | Catches | Blind to |
 |---|---|---|
-| **Unit** (903) | logic inside a module | whether modules are connected |
+| **Unit** (906) | logic inside a module | whether modules are connected |
 | **Wiring** | components not plugged in; settings wired to nothing | anything the real lifespan can't reach |
 | **Rendering** | dashboard JS that doesn't parse, run, or match the DOM | visual layout |
 | **Doc checks** (208) | docs contradicting the code | whether the code is right |
