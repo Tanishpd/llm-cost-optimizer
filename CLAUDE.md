@@ -200,6 +200,7 @@ every judgment call toward missing.
 | Prove it survives load | `scripts/loadtest.py` — asserts cost identities, not just latency |
 | Prove it survives *time* | `scripts/soak.py` — memory, fds, latency drift; distinguishes a leak from a step |
 | Export metrics to a scraper | `app/prometheus.py` — pure renderer; `/metrics` negotiates on `Accept` |
+| Measure the gate against reality | `app/shadow.py` — off by default; spends real money |
 | Diagnose a live problem | `docs/RUNBOOK.md` — add an entry when you add an alertable signal |
 | Bump the version | `app/__init__.py` only; `check_docs.py` asserts the rest agree |
 
@@ -282,10 +283,10 @@ which is worse than shared but far better than none.
 
 ## Current state
 
-**M0–M17 complete (2026-07-29).** The gateway runs and is hardened: all five tiers, both gates, eval
+**M0–M18 complete (2026-07-29).** The gateway runs and is hardened: all five tiers, both gates, eval
 harness, dashboard, auth, shared rate limiting, circuit breakers, structured logging, container
-image, streaming, per-tenant budgets, a durable audit trail. **765 unit + 10 integration
-tests** at 96% coverage, 165 doc-consistency checks. `python3 scripts/demo.py`
+image, streaming, per-tenant budgets, a durable audit trail. **794 unit + 10 integration
+tests** at 96% coverage, 169 doc-consistency checks. `python3 scripts/demo.py`
 walks every tier.
 
 **Shipping in `raw` confidence mode, not `calibrated`** — M6 fitted both calibrators and gate

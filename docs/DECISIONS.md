@@ -609,3 +609,53 @@ anyone who can guess it).
 excludes long RAG-style prompts from semantic caching, and differing system prompts already produce
 different exact keys — but if that changes, `tenant` becomes the right default and this entry should
 be reversed rather than argued with.
+
+## D29 — Shadow sampling: measure the claim continuously, and pay for it
+
+**Decision.** `SHADOW_SAMPLE_RATE` (default `0.0`) re-runs a fraction of gate-*accepted* local answers
+against the frontier, out of band, and records how much the two agree.
+
+**Why.** This project's claim is that a model's own logprobs say when its answer is good enough. That
+was validated **once**, offline, on 67 auto-gradable prompts — and gate `large` failed
+(RESEARCH.md §3.4). Everything since has run on the assumption that the raw thresholds remain roughly
+right for real traffic, with no way to notice if they stop being. A prompt distribution shifts, a
+model gets updated, and the gate degrades silently: the answers keep coming and nothing looks broken,
+which is precisely the failure this whole design is supposed to make visible.
+
+**Off by default, because it spends money.** A shadow call is a real frontier call for an answer
+nobody reads. That is the honest cost of the measurement, and it must be switched on deliberately —
+the mirror of `MAX_DAILY_SPEND_USD`, which must be switched *off* deliberately. At 1% of accepted
+traffic it costs roughly 1% of routing everything to the frontier.
+
+**It cannot outspend what it measures.** A shadow call is billed to the tenant, counts against the
+ceiling, and is skipped when either is exhausted. Measurement that could exhaust the budget it is
+measuring would be a poor instrument.
+
+**It cannot break what it measures.** It runs after the caller's response, detached. A failing
+frontier costs a measurement and never a request — asserted by a test, because that is the property
+that turns this from an instrument into a liability if it ever stops holding.
+
+**Only accepted local answers.** Cache hits were already checked when first produced, and a frontier
+answer *is* the reference — shadowing either would pay to compare something with itself. This
+therefore measures the **false-cheap** rate only: it says nothing about unnecessary escalations,
+which cost money rather than quality.
+
+**Lexical similarity, not a judge.** A judge model would double the cost and put a second model's
+opinion inside a number meant to be a tripwire. Jaccard over word sets, not a sequence ratio: two
+correct answers routinely differ in phrasing and order, and a sequence measure scores that as
+disagreement. **The absolute value is not a quality score** — correct answers score anywhere from
+~0.3 to ~0.9 by verbosity. A sustained drop against a deployment's own baseline is the signal.
+
+**It needs a real frontier**, and startup says so when it does not have one. The mock's content is
+canned (D9), so every comparison diverges and the rate reads 100% — a misconfiguration that looks
+exactly like a catastrophic gate. Verified: with `FRONTIER_MODEL=gpt-4o-mock` the divergence rate
+came back `1.0` at a mean similarity of `0.03`, which is a fact about the mock and nothing else.
+
+**Deterministic in the trace id**, not random: a replayed request makes the same decision, so an
+anomaly is reproducible rather than something that happened once. Hashed rather than
+`int(trace_id, 16) % N` — the modulo of a raw id is uniform only if the ids are, and the first
+version of this sampled 2000/2000 at rate 0.5 on sequential ids.
+
+**Revisit if.** The divergence rate becomes a number people act on rather than watch. At that point it
+needs a judge and a labelled sample — `eval/grading.py` already has both — and it stops being a
+tripwire and becomes a measurement, which is a different and more expensive thing.

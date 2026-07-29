@@ -161,6 +161,30 @@ The gateway sets `X-Content-Type-Options`, `X-Frame-Options` and
 `Referrer-Policy` itself, and `Cache-Control: no-store` on `/v1/*` so prompts
 do not sit in an intermediary cache.
 
+### `hlr_shadow_divergence_ratio` is rising
+
+**Meaning.** The confidence gate is increasingly accepting answers that do not
+resemble what the frontier would have said. The false-cheap rate is going up:
+callers are being served worse answers, and nothing else will tell you.
+
+**First, rule out the misconfiguration.** If `FRONTIER_MODEL` is the mock, the
+rate is 100% by construction — the mock's content is canned. Startup warns
+about this.
+
+```bash
+curl -s localhost:8000/healthz | jq '.config.shadow'
+```
+
+**If it is real**, the thresholds have drifted from the traffic. Raise
+`THRESHOLD_SMALL` / `THRESHOLD_LARGE` to escalate more readily — that trades
+money for quality, which is the trade this gateway exists to make explicitly
+rather than accidentally. Then re-run `eval/run_eval.py` against current traffic
+rather than guessing at the new numbers.
+
+**Do not read the absolute similarity as a quality score.** Correct answers to
+the same question score anywhere from ~0.3 to ~0.9 by verbosity. The trend
+against this deployment's own baseline is the signal.
+
 ### Answers are wrong, but nothing is unhealthy
 
 The most likely cause is the semantic cache serving a near-miss. A wrong cache

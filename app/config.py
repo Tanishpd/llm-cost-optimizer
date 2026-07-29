@@ -153,6 +153,23 @@ class Settings(BaseSettings):
     # is shown, because it is the most useful thing in the string.
     cache_scope: Literal["global", "tenant"] = "global"
 
+    # ---- Shadow sampling -------------------------------------------------
+    # Fraction of gate-ACCEPTED local answers to re-run against the frontier,
+    # out of band, to measure how often the cheap tier was wrong.
+    #
+    # Off by default. It costs real money — a shadow call is a real frontier
+    # call for an answer nobody reads — and spending money to measure has to be
+    # a deliberate act, exactly as MAX_DAILY_SPEND_USD is deliberate to raise.
+    #
+    # 0.01 samples 1% of accepted answers: roughly 1% of what routing everything
+    # to the frontier would cost, for a continuously updated false-cheap rate.
+    # Shadow spend counts against tenant budgets and the gateway ceiling, and is
+    # skipped when either is exhausted.
+    shadow_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    # Below this token-overlap ratio the two answers are counted as divergent.
+    # A tripwire, not a grade — see app/shadow.py.
+    shadow_divergence_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
+
     # ---- Audit trail -----------------------------------------------------
     # On by default. The gateway spends money per request, so a durable record
     # of what it decided is the kind of thing you want on unless you turned it

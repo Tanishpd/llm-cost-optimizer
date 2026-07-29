@@ -73,6 +73,7 @@ from app.schemas import (
     RouterRecord,
 )
 from app.security import PUBLIC_PATHS, ApiKeyAuth, RateLimiter, RequestLimits
+from app.shadow import ShadowSampler
 from app.streaming import sse_stream
 from app.telemetry import RequestRecord, Telemetry
 
@@ -136,6 +137,27 @@ async def lifespan(app: FastAPI):
     )
     app.state.budgets = BudgetLedger(
         redis, app.state.tenants, max_daily_spend_usd=settings.max_daily_spend_usd)
+    app.state.shadow = ShadowSampler(
+        rate=settings.shadow_sample_rate,
+        divergence_threshold=settings.shadow_divergence_threshold,
+    )
+    if app.state.shadow.enabled:
+        logger.info(
+            "shadow sampling ON at %.1f%% of gate-accepted local answers — these are "
+            "REAL frontier calls, billed to the tenant and counted against the ceiling",
+            settings.shadow_sample_rate * 100,
+        )
+        # The mock frontier's envelope is faithful and its *content* is canned
+        # (D9), so every comparison against it diverges by construction. A 100%
+        # divergence rate would then look like a catastrophic gate rather than
+        # a misconfiguration, which is the wrong thing to learn.
+        if "mock" in settings.frontier_model.lower() or ":8001" in settings.frontier_base_url:
+            logger.warning(
+                "SHADOW MEASUREMENTS ARE MEANINGLESS AGAINST THE MOCK FRONTIER (%s). Its "
+                "content is canned, so every comparison will diverge and the divergence "
+                "rate will read 100%%. Point FRONTIER_BASE_URL at a real provider, or set "
+                "SHADOW_SAMPLE_RATE=0.", settings.frontier_model,
+            )
     app.state.auth = ApiKeyAuth(
         settings.api_key_set,
         require_auth=settings.require_auth,
@@ -278,6 +300,10 @@ async def lifespan(app: FastAPI):
         # Before the client and Redis: draining writes records that were
         # already accepted, and losing them at shutdown is exactly the failure
         # a durable trail exists to prevent.
+        # Shadow comparisons are already paid for; losing one means having
+        # spent the money and learned nothing. Drained before the HTTP client
+        # closes, because they are still using it.
+        await app.state.shadow.drain()
         await app.state.audit.stop()
         await client.aclose()
         if redis is not None:
@@ -889,6 +915,18 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
         **cost.as_dict(),
     )
 
+    # ---- shadow ----------------------------------------------------------
+    # Fire-and-forget: the caller has their answer and never waits for this.
+    shadow: ShadowSampler = request.app.state.shadow
+    gate_accepted = bool(outcome.gates) and outcome.gates[-1].verdict == "accept"
+    if shadow.should_sample(trace_id, tier=tier, gate_accepted=gate_accepted):
+        shadow.stats.sampled += 1
+        shadow.spawn(_run_shadow(
+            request, messages=messages, served=completion.content,
+            trace_id=trace_id, tenant=tenant_name, tier=tier,
+            confidence=outcome.confidence,
+        ))
+
     await _record(
         request,
         RequestRecord(
@@ -975,6 +1013,83 @@ def _apply_sampling_defaults(body: ChatCompletionRequest, settings: Settings) ->
         body.temperature = settings.default_temperature
     if "max_tokens" not in body.model_fields_set:
         body.max_tokens = settings.default_max_tokens
+
+
+async def _run_shadow(
+    request: Request,
+    *,
+    messages: list[dict[str, str]],
+    served: str,
+    trace_id: str,
+    tenant: str,
+    tier: str,
+    confidence: float | None,
+) -> None:
+    """Ask the frontier what it would have said, and compare. Never raises.
+
+    Runs after the caller's response has been returned, so nothing here can
+    slow, fail, or alter the request it is measuring — a measurement that can
+    break the thing it measures is worse than no measurement.
+    """
+    settings = _settings(request)
+    shadow: ShadowSampler = request.app.state.shadow
+    ledger = request.app.state.budgets
+    try:
+        # A shadow call spends real money, so it asks permission like any
+        # other. Measuring must not be what exhausts the budget being measured.
+        ceiling = await ledger.check_global()
+        allowance = await ledger.check(tenant)
+        if not ceiling.allowed or not allowance.allowed:
+            shadow.stats.skipped_budget += 1
+            return
+
+        started = time.perf_counter()
+        reference = await _frontier(request).chat(
+            model=settings.frontier_model,
+            messages=messages,
+            temperature=settings.default_temperature,
+            max_tokens=settings.max_output_tokens,
+        )
+        usage = TokenUsage(reference.tokens_in, reference.tokens_out)
+        cost = compute_cost(
+            served_by="frontier", usage=usage,
+            price_in_per_m=settings.frontier_price_in,
+            price_out_per_m=settings.frontier_price_out,
+        )
+        await ledger.record(tenant, cost.cost_micro_usd)
+        score = shadow.record(
+            served=served, reference=reference.content,
+            cost_micro_usd=cost.cost_micro_usd,
+        )
+        elapsed = round((time.perf_counter() - started) * 1000, 1)
+
+        diverged = score < shadow.divergence_threshold
+        if diverged:
+            # The interesting event: the gate accepted an answer that does not
+            # resemble what the expensive model would have said.
+            logger.warning(
+                "shadow divergence trace=%s tier=%s confidence=%.4f similarity=%.4f",
+                trace_id, tier, confidence or 0.0, score,
+            )
+        request.app.state.audit.write({
+            "ts": time.time(),
+            "trace_id": trace_id,
+            "tenant": tenant,
+            "outcome": "shadow",
+            "tier": tier,
+            "confidence": confidence,
+            "similarity": round(score, 4),
+            "diverged": diverged,
+            "cost_micro_usd": cost.cost_micro_usd,
+            "latency_ms": {"shadow": elapsed},
+        })
+    except (ProviderUnavailable, ProviderTimeout) as exc:
+        # The frontier being down costs a measurement, never a request.
+        shadow.stats.failed += 1
+        logger.info("shadow call failed for %s (request unaffected): %s", trace_id, exc)
+    except Exception as exc:  # noqa: BLE001
+        shadow.stats.failed += 1
+        logger.warning("shadow comparison errored for %s: %s", trace_id, exc)
 
 
 def _matched_prompt(settings: Settings, prompt: str) -> str:
@@ -1260,6 +1375,8 @@ async def _health_snapshot(request: Request) -> dict[str, Any]:
             # operator needs told rather than left to infer from `redis.ok`.
             # `dropped` > 0 means the trail has holes. Surfaced rather than
             # left in a log line nobody greps.
+            "shadow": request.app.state.shadow.stats.as_dict()
+                      if request.app.state.shadow.enabled else {"enabled": False},
             "audit": request.app.state.audit.stats.as_dict()
                      if request.app.state.audit.enabled else {"enabled": False},
             "budgets_enforced": (
@@ -1384,6 +1501,7 @@ async def _metrics_payload(request: Request) -> dict[str, Any]:
         "window": "utc_day",
         "usage": await request.app.state.budgets.usage(),
     }
+    payload["shadow"] = request.app.state.shadow.stats.as_dict()
     return payload
 
 
