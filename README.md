@@ -3,9 +3,9 @@
 An API gateway that sits in front of several models of escalating cost and decides — per request —
 the cheapest one that will actually do the job.
 
-> **Status: M0–M13 complete. The gateway runs, and it's hardened.**
+> **Status: M0–M15 complete. The gateway runs, and it's hardened.**
 > All five tiers, both confidence gates, the eval harness and the dashboard are built and working —
-> **718 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
+> **751 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
 > rate
 > limiting, per-tenant budgets, a durable audit trail, circuit breakers, structured
 > logging and a container image are in. Run
@@ -446,7 +446,7 @@ from exactly-summed integer token counters.
 ## How it's tested
 
 ```bash
-.venv/bin/python -m pytest -m "not integration"   # 718, hermetic — needs nothing running
+.venv/bin/python -m pytest -m "not integration"   # 751, hermetic — needs nothing running
 .venv/bin/ruff check app eval scripts mock_frontier tests
 .venv/bin/python scripts/check_docs.py            # 133 cross-document checks
 ```
@@ -457,12 +457,13 @@ suite had caught **one of fourteen**.
 
 | Layer | Catches | Blind to |
 |---|---|---|
-| **Unit** (718) | logic inside a module | whether modules are connected |
+| **Unit** (751) | logic inside a module | whether modules are connected |
 | **Wiring** | components not plugged in; settings wired to nothing | anything the real lifespan can't reach |
 | **Rendering** | dashboard JS that doesn't parse, run, or match the DOM | visual layout |
-| **Doc checks** (133) | docs contradicting the code | whether the code is right |
+| **Doc checks** (143) | docs contradicting the code | whether the code is right |
 | **Integration** (10) | real models, real Redis, the real OpenAI SDK | sustained load |
 | **Load** | cost identities under concurrency | correctness of one request |
+| **Soak** | memory/fd growth, latency drift over time | anything faster than a window |
 
 Two things worth knowing:
 
@@ -481,9 +482,50 @@ testing — nothing currently grades whether an assertion would fail if the code
 were wrong. Concurrency is tested in a few places, but M10's multi-worker
 verification was done by hand and isn't in CI.
 
+### Metrics for a scraper
+
+`/metrics` negotiates: `Accept: text/plain` (what every Prometheus scraper sends) gets exposition
+format, anything else — including curl's bare `*/*` — keeps the JSON the dashboard consumes.
+`/metrics/prometheus` always serves exposition, for the human who would rather not think about
+Accept headers.
+
+```
+hlr_cost_saved_usd_total 1.07
+hlr_requests_by_tier_total{tier="local_small"} 30
+hlr_circuit_state{tier="frontier"} 2
+hlr_budgets_enforced 0
+```
+
+The last one is the alertable one: caps are configured and **not being applied**, so spend is
+uncapped right now. Full series list and what to alert on: [API.md](docs/API.md).
+
+### Endurance
+
+```bash
+python3 scripts/soak.py --minutes 30 --rps 2
+```
+
+`loadtest.py` answers *"does it survive 500 requests at concurrency 48"* in seven seconds — every bug
+it can find is a concurrency bug. This answers *"is it still the same process an hour later"*, which
+is where leaks, fd exhaustion and latency drift live. An 8-minute run:
+
+```
+381 requests, 12 windows
+  ok    no request failed
+  ok    RSS stable — 32.0 -> 49.2 MB (peak 65.7 MB)
+  ok    file descriptors stable (69 -> 68)
+  ok    p95 steady (15ms -> 15ms)
+  ok    served counts still reconcile
+```
+
+It distinguishes **a leak** (still climbing at the end) from **a step** (jumps once, then plateaus —
+an arena CPython never returns to the OS). The first is a failure; the second is a warning that your
+working set is the larger number. And it says plainly what it cannot tell you: 30 minutes is not 30
+days.
+
 ## Milestones
 
-Fourteen milestones, each independently runnable. M0 came first deliberately: it resolves the one
+Sixteen milestones, each independently runnable. M0 came first deliberately: it resolves the one
 assumption everything else rests on, before anything is built on top of it.
 
 | | Milestone | State |
@@ -502,10 +544,12 @@ assumption everything else rests on, before anything is built on top of it.
 | **M11** | Streaming, by buffering first | **done** — reverses D8 |
 | **M12** | Tenancy, budgets, durable audit trail | **done** |
 | **M13** | Test the dashboard and the wiring | **done** — found a dead setting |
+| **M14** | A spend ceiling that ships armed | **done** — bounds invariant 4 |
+| **M15** | Prometheus metrics, soak testing | **done** |
 
 ```
 $ .venv/bin/python -m pytest -q -m "not integration"
-718 passed, 10 deselected in 4.7s
+751 passed, 10 deselected in 10.4s
 
 $ .venv/bin/python scripts/preflight.py
   ✓ python 3.14.6   ✓ venv   ✓ disk 34.1 GB free   ! swap 87%
@@ -515,7 +559,7 @@ $ .venv/bin/python scripts/preflight.py
   ✓ redis reachable, no modules (brute-force cosine, as designed)
 
 $ .venv/bin/python scripts/check_docs.py
-  all 133 checks passed
+  all 143 checks passed
 ```
 
 The 10 integration tests need a live Ollama — one also needs the `openai` SDK, because a

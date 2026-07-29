@@ -24,9 +24,15 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    StreamingResponse,
+)
 from redis.asyncio import Redis
 
+from app import prometheus
 from app.audit import AuditLog, audit_entry
 from app.budgets import (
     BudgetLedger,
@@ -1104,13 +1110,17 @@ def _error(
     return JSONResponse(status_code=status, content=payload.model_dump())
 
 
-@app.get("/healthz")
-async def healthz(request: Request) -> Any:
-    """200 when the gateway can serve at all — not when everything is perfect.
+async def _health_snapshot(request: Request) -> dict[str, Any]:
+    """Build the health payload once, for both `/healthz` and the scraper.
 
-    Redis down disables caching but the gateway still answers, so that is
-    `degraded`, not unhealthy (invariant 4). Only "no model tier reachable at
-    all" is a 503.
+    Extracted so the Prometheus renderer reports the *same* dependency and
+    breaker state a human sees on `/healthz` — two health checks that could
+    disagree would be worse than one.
+
+    It does probe Ollama, so a scrape costs one loopback GET. At a normal
+    15–60s scrape interval that is immaterial, and the alternative — exporting
+    stale or registry-only state — would mean alerting on something other than
+    what is actually true.
     """
     settings = _settings(request)
     ollama = _ollama(request)
@@ -1195,8 +1205,20 @@ async def healthz(request: Request) -> Any:
             ),
         },
     )
-    return JSONResponse(status_code=503 if status == "unhealthy" else 200,
-        content=body.model_dump())
+    return body.model_dump()
+
+
+@app.get("/healthz")
+async def healthz(request: Request) -> Any:
+    """200 when the gateway can serve at all — not when everything is perfect.
+
+    Redis down disables caching but the gateway still answers, so that is
+    `degraded`, not unhealthy (invariant 4). Only "no model tier reachable at
+    all" is a 503.
+    """
+    body = await _health_snapshot(request)
+    return JSONResponse(
+        status_code=503 if body["status"] == "unhealthy" else 200, content=body)
 
 
 @app.post("/route")
@@ -1279,12 +1301,11 @@ async def dashboard() -> HTMLResponse:
     return render_dashboard()
 
 
-@app.get("/metrics")
-async def metrics(request: Request) -> dict[str, Any]:
-    """Aggregates for the dashboard. O(1) — counters, not a scan over the stream.
+async def _metrics_payload(request: Request) -> dict[str, Any]:
+    """The aggregate payload, shared by the JSON and exposition renderings.
 
-    Returns structurally complete zeros when Redis is down, so a dashboard
-    renders "no data" rather than crashing.
+    One source, so the dashboard and a scraper can never disagree about what
+    the gateway did.
     """
     settings = _settings(request)
     payload = await _telemetry(request).metrics(
@@ -1298,6 +1319,42 @@ async def metrics(request: Request) -> dict[str, Any]:
         "window": "utc_day",
         "usage": await request.app.state.budgets.usage(),
     }
+    return payload
+
+
+@app.get("/metrics/prometheus", response_class=PlainTextResponse)
+async def metrics_prometheus(request: Request) -> Any:
+    """Exposition format, unconditionally.
+
+    `/metrics` negotiates on `Accept`, which is what a scraper needs and what a
+    human debugging with `curl` will forget. This one is unambiguous.
+    """
+    payload = await _metrics_payload(request)
+    health = await _health_snapshot(request)
+    return PlainTextResponse(
+        prometheus.render(payload, health=health, tenants=payload.get("tenants")),
+        media_type=prometheus.CONTENT_TYPE,
+    )
+
+
+@app.get("/metrics")
+async def metrics(request: Request) -> Any:
+    """Aggregates for the dashboard. O(1) — counters, not a scan over the stream.
+
+    Returns structurally complete zeros when Redis is down, so a dashboard
+    renders "no data" rather than crashing.
+    """
+    payload = await _metrics_payload(request)
+    # `/metrics` is the name the ecosystem reserves for Prometheus exposition,
+    # and this endpoint has always served JSON for the dashboard. Negotiating
+    # keeps both true: a scraper sends `Accept: text/plain` and gets what it
+    # expects; everything else — including curl's bare `*/*` — keeps the JSON.
+    if prometheus.wants_prometheus(request.headers.get("accept")):
+        health = await _health_snapshot(request)
+        return PlainTextResponse(
+            prometheus.render(payload, health=health, tenants=payload.get("tenants")),
+            media_type=prometheus.CONTENT_TYPE,
+        )
     return payload
 
 
