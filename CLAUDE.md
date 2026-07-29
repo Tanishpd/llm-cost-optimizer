@@ -119,6 +119,14 @@ There the argument is: escalating from gate 1 costs ~450 ms and no money, so gat
 readily. Escalating from gate 2 costs real money, so it accepts at `TARGET_LARGE=0.85`, the spec's
 number, on the gate that actually spends. **Gate 1's bar is higher than gate 2's, not lower.**
 
+**Sampling defaults live in two endpoints and must not drift.** `DEFAULT_TEMPERATURE`
+and `DEFAULT_MAX_TOKENS` are operator policy applied by `_apply_sampling_defaults`, which
+**both** `/v1/chat/completions` and `/route` call. They must: temperature and max_tokens are
+part of the cache key (invariant 5), so if only one applied them, `/route`'s `exact_hit`
+preview would be computed from a different key than the real lookup. These two settings were
+defined, documented in `.env.example` *and* PLAN.md, and read by nothing at all until
+`tests/test_wiring.py` asked what every setting does.
+
 **The cascade is ordered data.** `app/cascade.py` holds a list of `(name, runner, gate)`; the
 executor walks it from the router's entry point. Adding or reordering a tier is a data change. Never
 reintroduce nested if/else routing — that's what the ordering exists to prevent.
@@ -264,8 +272,8 @@ which is worse than shared but far better than none.
 
 **M0–M13 complete (2026-07-28).** The gateway runs and is hardened: all five tiers, both gates, eval
 harness, dashboard, auth, shared rate limiting, circuit breakers, structured logging, container
-image, streaming, per-tenant budgets, a durable audit trail. **707 unit + 10 integration
-tests** at 96% coverage, 127 doc-consistency checks. `python3 scripts/demo.py`
+image, streaming, per-tenant budgets, a durable audit trail. **709 unit + 10 integration
+tests** at 96% coverage, 133 doc-consistency checks. `python3 scripts/demo.py`
 walks every tier.
 
 **Shipping in `raw` confidence mode, not `calibrated`** — M6 fitted both calibrators and gate

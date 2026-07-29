@@ -178,11 +178,17 @@ Drop-in OpenAI-compatible. An existing client works unchanged by pointing `base_
 |---|---|---|---|
 | `model` | string | `"gateway"` | Advisory. The gateway picks the real model. Reserved values below. |
 | `messages` | array | required | Standard OpenAI roles. `system` supported; multi-turn supported. |
-| `temperature` | float | `0.0` | Forwarded to whichever tier runs. **Part of the cache key.** |
+| `temperature` | float | `DEFAULT_TEMPERATURE` (`0.0`) | Forwarded to whichever tier runs. **Part of the cache key.** |
 | `top_p` | float | `1.0` | Forwarded. **Part of the cache key.** |
-| `max_tokens` | int | `512` | Forwarded. **Part of the cache key.** |
+| `max_tokens` | int | `DEFAULT_MAX_TOKENS` (`512`) | Forwarded, then clamped to `MAX_OUTPUT_TOKENS`. **Part of the cache key.** |
 | `stream` | bool | `false` | `true` returns SSE — see [Streaming](#streaming). Does **not** lower time-to-first-token. |
 | `stream_options` | object | `null` | `{"include_usage": true}` appends a final usage frame. Only meaningful with `stream: true`. |
+
+The defaults for `temperature` and `max_tokens` are **operator policy**, not
+constants: omit either and the gateway substitutes its configured default. An
+explicit value always wins. Because both are part of the cache key, `/route`
+applies the same defaults as `/v1/chat/completions` — otherwise its `exact_hit`
+preview would be computed from a different key than the real lookup.
 
 **Reserved `model` values** — escape hatches that bypass routing, for benchmarking and debugging:
 

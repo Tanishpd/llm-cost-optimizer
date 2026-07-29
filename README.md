@@ -5,7 +5,7 @@ the cheapest one that will actually do the job.
 
 > **Status: M0–M13 complete. The gateway runs, and it's hardened.**
 > All five tiers, both confidence gates, the eval harness and the dashboard are built and working —
-> **707 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
+> **709 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
 > rate
 > limiting, per-tenant budgets, a durable audit trail, circuit breakers, structured
 > logging and a container image are in. Run
@@ -429,6 +429,44 @@ Its first run found a real bug: per-request costs were rounded to whole micro-US
 so a documented `/metrics` identity was off by 75 micro-USD over 200 requests. Aggregates now derive
 from exactly-summed integer token counters.
 
+## How it's tested
+
+```bash
+.venv/bin/python -m pytest -m "not integration"   # 709, hermetic — needs nothing running
+.venv/bin/ruff check app eval scripts mock_frontier tests
+.venv/bin/python scripts/check_docs.py            # 133 cross-document checks
+```
+
+Six layers, split by what each can and cannot see. The split isn't aspirational —
+it came from counting where defects were actually found, and noticing the unit
+suite had caught **one of fourteen**.
+
+| Layer | Catches | Blind to |
+|---|---|---|
+| **Unit** (709) | logic inside a module | whether modules are connected |
+| **Wiring** | components not plugged in; settings wired to nothing | anything the real lifespan can't reach |
+| **Rendering** | dashboard JS that doesn't parse, run, or match the DOM | visual layout |
+| **Doc checks** (133) | docs contradicting the code | whether the code is right |
+| **Integration** (10) | real models, real Redis, the real OpenAI SDK | sustained load |
+| **Load** | cost identities under concurrency | correctness of one request |
+
+Two things worth knowing:
+
+**Coverage is measured and is deliberately not a gate.** It sat at ~95% while
+`CONFIDENCE_MODE=calibrated` was wired to nothing and `DEFAULT_MAX_TOKENS` was
+read by nothing. Every line ran — they just ran disconnected. `test_wiring.py`
+exists because coverage can't express *"and then it is used"*, and it found the
+dead setting on its first run.
+
+**The unit suite is hermetic and CI keeps it that way**, re-running it behind a
+dead proxy so a test that starts reaching the network fails there rather than
+becoming flaky later.
+
+**Still not covered**, stated rather than implied: no property-based or mutation
+testing — nothing currently grades whether an assertion would fail if the code
+were wrong. Concurrency is tested in a few places, but M10's multi-worker
+verification was done by hand and isn't in CI.
+
 ## Milestones
 
 Fourteen milestones, each independently runnable. M0 came first deliberately: it resolves the one
@@ -453,7 +491,7 @@ assumption everything else rests on, before anything is built on top of it.
 
 ```
 $ .venv/bin/python -m pytest -q -m "not integration"
-707 passed, 10 deselected in 4.81s
+709 passed, 10 deselected in 4.9s
 
 $ .venv/bin/python scripts/preflight.py
   ✓ python 3.14.6   ✓ venv   ✓ disk 34.1 GB free   ! swap 87%
@@ -463,7 +501,7 @@ $ .venv/bin/python scripts/preflight.py
   ✓ redis reachable, no modules (brute-force cosine, as designed)
 
 $ .venv/bin/python scripts/check_docs.py
-  all 127 checks passed
+  all 133 checks passed
 ```
 
 The 10 integration tests need a live Ollama — one also needs the `openai` SDK, because a
@@ -475,7 +513,7 @@ in CI; the unit suite is hermetic and is re-run behind a dead proxy to keep it t
 | Document | What's in it |
 |---|---|
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | How it's put together — lifecycle, components, state, failure model, seams |
-| **[docs/PLAN.md](docs/PLAN.md)** | Milestones M0–M10, config surface, Redis schema, verification commands |
+| **[docs/PLAN.md](docs/PLAN.md)** | Milestones M0–M13, config surface, Redis schema, verification commands |
 | **[docs/API.md](docs/API.md)** | The HTTP contract — endpoints, the `x_hlr` block, error shapes, cost math |
 | **[docs/DECISIONS.md](docs/DECISIONS.md)** | Why it's built this way, what was rejected, what would change each call |
 | **[docs/RESEARCH.md](docs/RESEARCH.md)** | Verified API shapes, confidence math, measured constraints, sources |

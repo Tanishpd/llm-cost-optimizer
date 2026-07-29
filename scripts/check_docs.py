@@ -214,6 +214,37 @@ def check_milestones_are_not_still_pending() -> None:
                   claim not in corpus)
 
 
+def check_request_defaults_match_config() -> None:
+    """API.md's request table must not hardcode a default the operator can change.
+
+    It said `max_tokens | int | 512` while the real default had become
+    `DEFAULT_MAX_TOKENS` — a doc stating a constant where a knob exists is the
+    same lie as a knob wired to nothing, told from the other end.
+    """
+    sys.path.insert(0, str(ROOT))
+    from app.config import Settings
+
+    s = Settings(_env_file=None)
+    api = (ROOT / "docs/API.md").read_text()
+
+    for field, setting in (("temperature", "DEFAULT_TEMPERATURE"),
+                           ("max_tokens", "DEFAULT_MAX_TOKENS")):
+        row = re.search(rf"^\|\s*`{field}`\s*\|.*$", api, re.M)
+        check(f"API.md documents a `{field}` row", row is not None)
+        if row:
+            check(f"API.md's `{field}` default names {setting}",
+                  setting in row.group(0),
+                  "it is operator-configurable, not a constant")
+
+    # And the parenthesised value in that row must be the real one.
+    for field, value in (("temperature", s.default_temperature),
+                         ("max_tokens", s.default_max_tokens)):
+        row = re.search(rf"^\|\s*`{field}`\s*\|.*$", api, re.M)
+        if row:
+            check(f"API.md's `{field}` default value is {value}",
+                  str(value) in row.group(0))
+
+
 def check_endpoints_documented() -> None:
     """Every route the app serves must appear in API.md.
 
@@ -313,6 +344,7 @@ def main() -> int:
     check_no_stale_status()
     check_promised_files_exist()
     check_dashboard_is_self_contained()
+    check_request_defaults_match_config()
     check_endpoints_documented()
     check_middleware_limits_documented()
     check_secrets_are_secret()
