@@ -210,11 +210,20 @@ capability, not availability.
 | Frontier down | Best local answer returned, gate verdict overridden | `degraded: ["frontier_unavailable"]` |
 | Logprobs unavailable | Fall back to `CONFIDENCE_STRATEGY=self_consistency` | `degraded: ["logprobs_unavailable"]` |
 | A tier keeps failing | Breaker opens; requests skip it instead of waiting out the timeout | `short_circuited` in `/healthz` |
+| **Gateway over its daily ceiling** | Frontier dropped for *everyone*; local tiers serve | `degraded: ["spend_ceiling_reached"]` |
+| Ceiling reached **and** Ollama down | 503 — the only bound on invariant 4's cost | `spend_ceiling_reached` |
 | Tenant over their daily cap | Frontier dropped from the cascade; local tiers serve | `degraded: ["budget_exhausted:<tenant>"]` |
 | Over cap **and** frontier pinned | 402 — the caller removed the fallback themselves | `budget_exhausted` |
 | Redis down, budgets configured | Caps unenforced rather than blocking all spend | `degraded: ["budget_unavailable"]` |
 | Audit writer cannot keep up | Records dropped, never blocking the request | `audit.dropped` in `/healthz` |
 | **Everything down** | 503 `all_tiers_down` | The only real failure |
+
+**The most expensive failure is a healthy one.** *Ollama down* keeps the gateway answering by
+escalating everything — correct for availability, and about $138/day per client at the shipped rate
+limit. `MAX_DAILY_SPEND_USD` bounds it, ships armed, and turns an unbounded invoice into a loud 503
+once the local tiers cannot serve either ([D27](DECISIONS.md)). It is a blunt instrument: it bounds
+damage rather than detecting the anomaly, and a breaker on the *rate* of escalations would trip in
+seconds rather than dollars.
 
 The interesting one is *frontier down*. The gate said escalate, and escalation is impossible — so the
 gateway returns the local answer it already has, and says plainly in `reason` that it did. Returning a
@@ -295,7 +304,7 @@ actually found, and noticing that the unit suite caught one of fourteen.
 
 | Layer | Command | Catches | Blind to |
 |---|---|---|---|
-| **Unit** (709, hermetic) | `pytest -m "not integration"` | Logic inside a module | Whether modules are connected |
+| **Unit** (718, hermetic) | `pytest -m "not integration"` | Logic inside a module | Whether modules are connected |
 | **Wiring** | `tests/test_wiring.py` | Components not plugged in; settings wired to nothing | Anything the real lifespan cannot reach |
 | **Rendering** | `tests/test_dashboard.py` | JS that does not parse, run, or match the DOM | Visual layout — a bar can be the wrong width and still render |
 | **Doc consistency** (133) | `scripts/check_docs.py` | Docs contradicting the code | Whether the code is right |

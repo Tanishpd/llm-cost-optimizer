@@ -24,6 +24,7 @@ from app.audit import AuditLog
 from app.budgets import (
     ANONYMOUS_TENANT,
     DEFAULT_TENANT,
+    GLOBAL_BUCKET,
     BudgetLedger,
     Tenant,
     TenantRegistry,
@@ -36,6 +37,7 @@ from app.cache.singleflight import SingleFlight
 from app.config import Settings
 from app.costs import usd_to_micro
 from app.main import app
+from app.providers.base import ProviderUnavailable
 from app.ratelimit import RedisRateLimiter
 from app.resilience import BreakerRegistry, RetryPolicy
 from app.security import ApiKeyAuth, RequestLimits
@@ -216,7 +218,10 @@ async def test_recording_sets_a_ttl_so_windows_do_not_leak():
     redis = FakeRedis()
     ledger = BudgetLedger(redis, registry(acme="1.00"))
     await ledger.record("acme", 500)
-    assert list(redis.expires.values()) == [60 * 60 * 48]
+    # Two keys: the tenant's window and the gateway-wide one, both TTL'd in the
+    # same pipeline so neither can be left immortal.
+    assert sorted(redis.expires) == sorted([window_key("acme"), window_key(GLOBAL_BUCKET)])
+    assert set(redis.expires.values()) == {60 * 60 * 48}
 
 
 async def test_redis_down_fails_open_and_says_so():
@@ -294,10 +299,11 @@ async def test_the_documented_overshoot_bound_actually_holds():
 
 @pytest.fixture
 def budget_client():
-    def _make(*, tenants, redis=None, keys=None, frontier=None):
+    def _make(*, tenants, redis=None, keys=None, frontier=None, ollama=None,
+              max_daily_spend_usd=Decimal("0")):
         c = TestClient(app)
         c.app.state.settings = Settings(_env_file=None)
-        c.app.state.ollama = StubOllama()
+        c.app.state.ollama = ollama or StubOllama()
         c.app.state.http = None
         c.app.state.redis = None
         c.app.state.exact_cache = ExactCache(None)
@@ -306,7 +312,8 @@ def budget_client():
         c.app.state.semantic_cache = SemanticCache(None, enabled=False)
         c.app.state.singleflight = SingleFlight(None)
         c.app.state.tenants = tenants
-        c.app.state.budgets = BudgetLedger(redis, tenants)
+        c.app.state.budgets = BudgetLedger(
+            redis, tenants, max_daily_spend_usd=max_daily_spend_usd)
         c.app.state.auth = ApiKeyAuth(
             keys or set(), tenant_for=lambda k: tenants.resolve(k).name)
         c.app.state.rate_limiter = RedisRateLimiter(None, limit=0)
@@ -483,3 +490,141 @@ def test_budgets_survive_the_json_float_round_trip():
     integer micros against that would be off by one."""
     s = Settings(_env_file=None, tenants={"acme": {"daily_budget_usd": 0.1}})
     assert s.tenant_list()[0].daily_budget_micro == 100_000
+
+
+# --------------------------------------------------------------------------
+# the gateway-wide ceiling
+#
+# Unlike the per-tenant budgets above, this ships ARMED. It exists because
+# invariant 4 ("Ollama down -> escalate everything") keeps the gateway
+# answering at roughly $138/day per client at the shipped rate limit, and
+# before this the only protection was opt-in — present, and unarmed.
+# --------------------------------------------------------------------------
+
+
+def test_the_ceiling_is_armed_by_default():
+    """A safety limit that defaults to off is how you learn about it from an
+    invoice. This is the one budget setting that is deliberately not 0."""
+    assert Settings(_env_file=None).max_daily_spend_usd == Decimal("10.00")
+
+
+async def test_global_spend_accumulates_across_tenants():
+    """The point of a *gateway* ceiling: no single tenant need exceed anything
+    for the gateway to have spent too much."""
+    redis = FakeRedis()
+    ledger = BudgetLedger(redis, registry(a="100", b="100"),
+                          max_daily_spend_usd=Decimal("1.00"))
+    await ledger.record("a", usd_to_micro(Decimal("0.60")))
+    assert (await ledger.check_global()).allowed
+    await ledger.record("b", usd_to_micro(Decimal("0.50")))
+
+    v = await ledger.check_global()
+    assert not v.allowed
+    assert "ceiling reached" in v.reason
+    # Neither tenant is anywhere near their own $100.
+    assert (await ledger.check("a")).allowed
+    assert (await ledger.check("b")).allowed
+
+
+async def test_zero_disables_the_ceiling():
+    redis = FakeRedis()
+    ledger = BudgetLedger(redis, registry(), max_daily_spend_usd=Decimal("0"))
+    await ledger.record(DEFAULT_TENANT, usd_to_micro(Decimal("999")))
+    assert (await ledger.check_global()).allowed
+
+
+async def test_the_ceiling_fails_open_and_says_so():
+    """Same trade as the tenant budgets (D25): failing closed would turn a
+    Redis blip into a total frontier outage."""
+    ledger = BudgetLedger(FakeRedis(fail=True), registry(),
+                          max_daily_spend_usd=Decimal("1.00"))
+    v = await ledger.check_global()
+    assert v.allowed and v.unavailable
+
+
+async def test_usage_reports_the_ceiling_separately_from_tenants():
+    redis = FakeRedis()
+    ledger = BudgetLedger(redis, registry(acme="5.00"),
+                          max_daily_spend_usd=Decimal("20.00"))
+    await ledger.record("acme", usd_to_micro(Decimal("1.00")))
+    usage = await ledger.usage()
+    assert usage[GLOBAL_BUCKET]["spent_usd"] == pytest.approx(1.0)
+    assert usage[GLOBAL_BUCKET]["limit_usd"] == pytest.approx(20.0)
+    assert usage["acme"]["spent_usd"] == pytest.approx(1.0)
+
+
+def test_the_ceiling_degrades_to_local_like_a_tenant_budget(budget_client):
+    reg = registry(acme="100.00")
+    redis = FakeRedis()
+    redis.store[window_key(GLOBAL_BUCKET)] = usd_to_micro(Decimal("10.00"))
+
+    c = budget_client(tenants=reg, redis=redis, keys={"sk-acme"},
+                      max_daily_spend_usd=Decimal("10.00"))
+    r = _ask(c, "Prove every finite integral domain is a field.")
+
+    assert r.status_code == 200
+    hlr = r.json()["x_hlr"]
+    assert "frontier" not in hlr["path"]
+    assert "spend_ceiling_reached" in hlr["degraded"]
+    assert "ceiling reached" in hlr["reason"]
+
+
+def test_the_ceiling_outranks_a_tenant_who_is_within_budget(budget_client):
+    """acme has $100 of headroom and still may not spend: an operator limit is
+    not something a caller can be within."""
+    reg = registry(acme="100.00")
+    redis = FakeRedis()
+    redis.store[window_key(GLOBAL_BUCKET)] = usd_to_micro(Decimal("10.00"))
+
+    c = budget_client(tenants=reg, redis=redis, keys={"sk-acme"},
+                      max_daily_spend_usd=Decimal("10.00"))
+    hlr = _ask(c, "q").json()["x_hlr"]
+
+    # The tenant's own position is still reported truthfully...
+    assert hlr["budget"]["tenant"] == "acme"
+    assert hlr["budget"]["remaining_usd"] == pytest.approx(100.0)
+    # ...but the ceiling is what governed.
+    assert "spend_ceiling_reached" in hlr["degraded"]
+
+
+def test_pinned_frontier_under_the_ceiling_is_503_not_402(budget_client):
+    """The caller's account is fine and they can do nothing about it, so
+    billing them for the refusal would be the wrong story."""
+    reg = registry(acme="100.00")
+    redis = FakeRedis()
+    redis.store[window_key(GLOBAL_BUCKET)] = usd_to_micro(Decimal("10.00"))
+
+    c = budget_client(tenants=reg, redis=redis, keys={"sk-acme"},
+                      max_daily_spend_usd=Decimal("10.00"))
+    r = _ask(c, "q", model="gateway:frontier")
+    assert r.status_code == 503
+    assert r.json()["error"]["code"] == "spend_ceiling_reached"
+
+
+def test_the_ollama_outage_scenario_is_bounded(budget_client):
+    """The scenario this whole setting exists for.
+
+    Ollama is down, so invariant 4 sends every request to the frontier. Without
+    a ceiling that is unbounded; with one it stops, and says why.
+    """
+    reg = registry()
+    redis = FakeRedis()
+    c = budget_client(
+        tenants=reg, redis=redis, keys=set(),
+        ollama=StubOllama(error=ProviderUnavailable("unreachable", fix="ollama serve &")),
+        max_daily_spend_usd=Decimal("0.0005"),
+    )
+    codes, tiers = [], []
+    for i in range(6):
+        r = _ask(c, f"question {i}", key="")
+        codes.append(r.status_code)
+        if r.status_code == 200:
+            tiers.append(r.json()["x_hlr"]["tier"])
+
+    assert "frontier" in tiers, "the first requests should escalate as designed"
+    spent = redis.store.get(window_key(GLOBAL_BUCKET), 0)
+    assert spent <= usd_to_micro(Decimal("0.0005")) + max_overshoot_micro(
+        4096, Decimal("10.00")), "spend exceeded the ceiling by more than one request"
+    # Once the ceiling binds and Ollama is still down, there is nothing left to
+    # serve with — a loud 503 rather than a quiet invoice.
+    assert 503 in codes

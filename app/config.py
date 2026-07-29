@@ -123,9 +123,20 @@ class Settings(BaseSettings):
     #   TENANTS='{"acme": {"keys": ["sk-a","sk-b"], "daily_budget_usd": "5.00"}}'
     tenants: dict[str, dict[str, Any]] = Field(default_factory=dict)
     # Applies to `default` and `anonymous`. 0 = unlimited, which is the
-    # shipped default — turning on budgets must be a deliberate act, not
-    # something an upgrade does to you.
+    # shipped default — turning on per-tenant budgets must be a deliberate act,
+    # not something an upgrade does to you.
     default_daily_budget_usd: Decimal = Decimal("0")
+
+    # The gateway's own daily ceiling, across every tenant. UNLIKE the per-
+    # tenant budgets above, this ships ARMED, and the asymmetry is deliberate:
+    # tenant budgets are a business policy, this is a safety limit, and a safety
+    # limit that defaults to off is how you find out about it from an invoice.
+    #
+    # It exists because invariant 4 ("Ollama down -> escalate everything") keeps
+    # the gateway answering at roughly $138/day per client at the shipped rate
+    # limit. $10 is far above any demo and far below a surprise. Raise it
+    # deliberately for real traffic; 0 disables it entirely.
+    max_daily_spend_usd: Decimal = Decimal("10.00")
 
     # ---- Audit trail -----------------------------------------------------
     # On by default. The gateway spends money per request, so a durable record

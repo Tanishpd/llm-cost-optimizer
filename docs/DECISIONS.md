@@ -526,3 +526,45 @@ happened to the calibrated confidence mode.
 
 **Revisit if.** Records need to outlive the host, or need querying across workers. Then this becomes
 a shipper target (the JSONL is already the right format) rather than something to reimplement.
+
+## D27 — The gateway has its own spend ceiling, and it ships armed
+
+**Decision.** `MAX_DAILY_SPEND_USD`, default **10.00**, across all tenants. It outranks per-tenant
+budgets. When it binds, requests degrade to the local tiers; if those are also down, they get a 503.
+
+**Why it exists.** Invariant 4 says *"Ollama down → escalate everything"*, and that is the right call
+for availability. It is also, measured at the shipped `RATE_LIMIT_PER_MINUTE=60`, about **$138/day
+per client** — and rate limiting is per principal, so ten clients is ten times that. The safety
+behaviour and the expensive behaviour are the same behaviour.
+
+Per-tenant budgets (D22–D25) could already bound this. They are opt-in and default to unlimited, so
+the protection was present and unarmed. That is the worst state for a control to be in: it looks
+handled in the code and in the docs, and stops nothing.
+
+**Why armed by default, when tenant budgets are not.** They are different kinds of limit. A tenant
+budget is a *business policy* — an operator's decision about what an account may spend — and imposing
+one on upgrade would be presumptuous. A ceiling is a *safety limit*, and a safety limit that defaults
+to off is how you find out about it from an invoice. $10 is far above any demo and far below a
+surprise.
+
+**Why it outranks the tenant budget.** An operator limit is not something a caller can be "within".
+A tenant with $100 of headroom is still refused, and `x_hlr.budget` keeps reporting their true
+position — "who am I and what have I spent" is a different question from "why was I refused", and
+collapsing them would hide one behind the other.
+
+**Why 503 and not 402.** A 402 says *your account is short*. Under the ceiling the caller's account is
+fine and there is nothing they can do; billing them for the refusal would be the wrong story.
+
+**What it deliberately is not.** A daily ceiling is blunt. It cannot tell a legitimate traffic spike
+from a local-tier outage — it only bounds the damage either way, and it does so *after* the money is
+spent rather than when the anomaly starts. The sharper instrument is a breaker on the *rate* of
+frontier escalations, which is the actual signature of an outage and would trip in seconds rather
+than dollars. That is worth building; it is not a reason to ship without a bound.
+
+**Rejected.** Leaving it to tenant budgets (unarmed by default, which is how this gap existed).
+Refusing all traffic when the ceiling binds (the local tiers cost nothing and can still answer most
+prompts — the same reasoning as D23). A monthly rather than daily window (a runaway exhausts a
+monthly budget just as fast, and then you are unprotected for four weeks).
+
+**Revisit if.** The escalation-rate breaker gets built — then this becomes the backstop rather than
+the primary control, and its default could reasonably rise.

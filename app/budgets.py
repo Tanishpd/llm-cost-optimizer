@@ -55,6 +55,11 @@ WINDOW_TTL_S = 60 * 60 * 48
 DEFAULT_TENANT = "default"
 ANONYMOUS_TENANT = "anonymous"
 
+# The whole gateway's spend, across every tenant. Not a tenant itself — the
+# leading underscores keep it out of any namespace an operator would configure,
+# and `usage()` reports it separately so it is never mistaken for an account.
+GLOBAL_BUCKET = "__all__"
+
 
 def window_key(tenant: str, *, now: datetime | None = None) -> str:
     """`hlr:budget:{tenant}:{YYYY-MM-DD}` — UTC, so the boundary does not move
@@ -167,11 +172,70 @@ class TenantRegistry:
 
 
 class BudgetLedger:
-    """Reads and writes per-tenant spend. Never raises."""
+    """Reads and writes per-tenant spend, and the global ceiling. Never raises.
 
-    def __init__(self, redis: Redis | None, registry: TenantRegistry) -> None:
+    The global ceiling exists because the *safety* behaviour is also the
+    expensive one. Invariant 4 says "Ollama down -> escalate everything", which
+    keeps the gateway answering and, at the shipped rate limit, spends about
+    $138/day per client while doing it. Tenant budgets can cap that, but they
+    are opt-in — so before this existed the protection was present and unarmed.
+
+    A daily ceiling is deliberately blunt. It cannot distinguish a legitimate
+    traffic spike from a local-tier outage; it only bounds the damage either
+    way. The sharper instrument — tripping on a sudden jump in the *rate* of
+    frontier escalations, which is the actual signature of an outage — is worth
+    building later and is not a reason to ship without a bound now.
+    """
+
+    def __init__(
+        self,
+        redis: Redis | None,
+        registry: TenantRegistry,
+        *,
+        max_daily_spend_usd: Decimal = Decimal("0"),
+    ) -> None:
         self._redis = redis
         self._registry = registry
+        self._global_limit = usd_to_micro(max_daily_spend_usd) if max_daily_spend_usd > 0 else 0
+
+    @property
+    def global_limit_micro(self) -> int:
+        return self._global_limit
+
+    async def check_global(self, *, now: datetime | None = None) -> BudgetVerdict:
+        """Has the gateway as a whole spent its daily allowance?
+
+        Checked before the tenant's own budget: an operator ceiling is not
+        something a caller can be within.
+        """
+        if self._global_limit <= 0:
+            return BudgetVerdict(True, GLOBAL_BUCKET, reason="no global ceiling configured")
+        if self._redis is None:
+            return BudgetVerdict(
+                True, GLOBAL_BUCKET, limit_micro=self._global_limit, unavailable=True,
+                reason="global ceiling not enforced: Redis unreachable",
+            )
+        try:
+            raw = await self._redis.get(window_key(GLOBAL_BUCKET, now=now))
+            spent = int(raw or 0)
+        except (RedisError, ValueError, TypeError) as exc:
+            logger.warning("global budget read failed, allowing: %s", exc)
+            return BudgetVerdict(
+                True, GLOBAL_BUCKET, limit_micro=self._global_limit, unavailable=True,
+                reason="global ceiling not enforced: Redis read failed",
+            )
+        if spent >= self._global_limit:
+            return BudgetVerdict(
+                False, GLOBAL_BUCKET, spent_micro=spent, limit_micro=self._global_limit,
+                reason=(
+                    f"gateway daily spend ceiling reached: ${micro_to_usd(spent)} of "
+                    f"${micro_to_usd(self._global_limit)} (UTC day, all tenants)"
+                ),
+            )
+        return BudgetVerdict(
+            True, GLOBAL_BUCKET, spent_micro=spent, limit_micro=self._global_limit,
+            reason=f"${micro_to_usd(self._global_limit - spent)} of today's ceiling remaining",
+        )
 
     @property
     def available(self) -> bool:
@@ -227,11 +291,16 @@ class BudgetLedger:
         if self._redis is None or cost_micro_usd <= 0:
             return -1
         key = window_key(tenant_name, now=now)
+        gkey = window_key(GLOBAL_BUCKET, now=now)
         try:
+            # Both counters in one pipeline: a tenant's spend and the gateway's
+            # total can never disagree about a request that happened.
             pipe = self._redis.pipeline(transaction=False)
             pipe.incrby(key, cost_micro_usd)
             pipe.expire(key, WINDOW_TTL_S)
-            total, _ = await pipe.execute()
+            pipe.incrby(gkey, cost_micro_usd)
+            pipe.expire(gkey, WINDOW_TTL_S)
+            total, _, _, _ = await pipe.execute()
             return int(total)
         except RedisError as exc:
             # The request already succeeded and the provider already billed.
@@ -246,6 +315,14 @@ class BudgetLedger:
         if self._redis is None:
             return {}
         out: dict[str, dict] = {}
+        if self._global_limit > 0:
+            try:
+                spent = int(await self._redis.get(window_key(GLOBAL_BUCKET, now=now)) or 0)
+                out[GLOBAL_BUCKET] = BudgetVerdict(
+                    spent < self._global_limit, GLOBAL_BUCKET,
+                    spent_micro=spent, limit_micro=self._global_limit).as_dict()
+            except (RedisError, ValueError, TypeError):
+                pass
         for name in self._registry.names:
             tenant = self._registry.get(name)
             try:

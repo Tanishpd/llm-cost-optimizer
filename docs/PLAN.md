@@ -637,6 +637,7 @@ nothing about the tests.
 | `STREAM_CHUNK_CHARS` | `24` | Characters per SSE content frame. Trades frame smoothness against ~200 bytes of envelope each; `0` sends one frame |
 | `TENANTS` | `{}` | JSON: `{"acme": {"keys": [...], "daily_budget_usd": "5.00"}}`. JSON rather than a delimited string because API keys may contain `:` or `=` |
 | `DEFAULT_DAILY_BUDGET_USD` | `0` | Cap for the implicit `default` and `anonymous` tenants. 0 = unlimited |
+| `MAX_DAILY_SPEND_USD` | `10.00` | **Armed by default.** The gateway's own daily ceiling across all tenants, bounding the cost of invariant 4. 0 disables |
 | `AUDIT_ENABLED` | `true` | Durable JSONL record of every routing decision, refusals included |
 | `AUDIT_PATH` | `audit` | Directory. One file per worker PID — a line can exceed `PIPE_BUF`, above which concurrent `O_APPEND` is not atomic |
 | `AUDIT_MAX_BYTES` | `52428800` | Rotate at 50 MB. Granularity is the batch, so a file may exceed this by up to one batch |
