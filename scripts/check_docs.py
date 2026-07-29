@@ -280,6 +280,19 @@ def check_version_is_single_sourced() -> None:
           f"[{__version__}]" in changelog,
           "a release with no notes is a release nobody can review")
 
+    # ...and it must be the *newest* section, not merely present somewhere.
+    #
+    # Having a section is satisfied forever once a version ships, so bumping
+    # `__version__` and forgetting the notes passed silently — which is how
+    # `[0.2.0]` ended up describing a release that was never tagged while the
+    # package had moved on. The first version heading is the one a reader takes
+    # as current, so that is the one that has to agree.
+    versions = re.findall(r"^## \[(\d+\.\d+\.\d+)\]", changelog, re.M)
+    check("CHANGELOG.md's newest section is the current version",
+          bool(versions) and versions[0] == __version__,
+          f"newest section is {versions[0] if versions else 'none'}, "
+          f"package is {__version__}")
+
 
 def check_runbook_covers_the_alertable_signals() -> None:
     """Every signal the docs tell you to alert on must have an entry saying

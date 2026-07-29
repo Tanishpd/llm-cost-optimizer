@@ -323,7 +323,7 @@ which is worse than shared but far better than none.
 **M0–M23 complete (2026-07-29).** The gateway runs and is hardened: all five tiers, both gates, eval
 harness, dashboard, auth, shared rate limiting, circuit breakers, structured logging, container
 image, streaming, per-tenant budgets, a durable audit trail. **889 unit + 10 integration
-tests** at 96% coverage, 185 doc-consistency checks. `python3 scripts/demo.py`
+tests** at 96% coverage, 186 doc-consistency checks. `python3 scripts/demo.py`
 walks every tier.
 
 **The calibration passes. `raw` is still the shipped default.** The corrected real-frontier run
