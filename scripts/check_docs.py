@@ -253,6 +253,36 @@ def check_request_defaults_match_config() -> None:
                   str(value) in row.group(0))
 
 
+def check_milestone_counts_are_history_not_status() -> None:
+    """Milestone entries in PLAN.md record what was true *at that milestone*.
+
+    They must not be rewritten when the current totals move. Bumping the test
+    count across the docs with a global find-and-replace does exactly that, and
+    it happened repeatedly: M21's line was dragged 845 -> 863 -> 867 -> 872 ->
+    888 -> 889 -> 902 -> 903 across one afternoon, quietly restating history to
+    match the present each time.
+
+    The tell is cheap to check. Milestones only ever add tests and checks, so
+    the counts must not decrease down the file. A global replace makes an early
+    entry equal to the newest one, which shows up here as a *later* entry no
+    longer being the largest — or as an early one overtaking its successor.
+    """
+    plan = (ROOT / "docs/PLAN.md").read_text()
+    counts = [(int(t), int(d)) for t, d in
+              re.findall(r"^(\d+) unit tests, (\d+) doc checks\.$", plan, re.M)]
+    check("docs/PLAN.md records milestone test counts", len(counts) >= 2)
+    if len(counts) < 2:
+        return
+    tests_ok = all(a[0] <= b[0] for a, b in zip(counts, counts[1:], strict=False))
+    docs_ok = all(a[1] <= b[1] for a, b in zip(counts, counts[1:], strict=False))
+    check("milestone test counts never decrease down PLAN.md", tests_ok,
+          f"got {[c[0] for c in counts]} — an earlier milestone claims more "
+          "tests than a later one, which usually means a global replace "
+          "rewrote history")
+    check("milestone doc-check counts never decrease down PLAN.md", docs_ok,
+          f"got {[c[1] for c in counts]}")
+
+
 def check_version_is_single_sourced() -> None:
     """`app/__init__.py` is the version; everything else must agree.
 
@@ -431,6 +461,7 @@ def main() -> int:
     check_promised_files_exist()
     check_dashboard_is_self_contained()
     check_eval_cost_matches_the_dataset()
+    check_milestone_counts_are_history_not_status()
     check_version_is_single_sourced()
     check_runbook_covers_the_alertable_signals()
     check_request_defaults_match_config()

@@ -486,7 +486,7 @@ suite had caught **one of fourteen**.
 | **Unit** (903) | logic inside a module | whether modules are connected |
 | **Wiring** | components not plugged in; settings wired to nothing | anything the real lifespan can't reach |
 | **Rendering** | dashboard JS that doesn't parse, run, or match the DOM | visual layout |
-| **Doc checks** (186) | docs contradicting the code | whether the code is right |
+| **Doc checks** (189) | docs contradicting the code | whether the code is right |
 | **Integration** (10) | real models, real Redis, the real OpenAI SDK | sustained load |
 | **Load** | cost identities under concurrency | correctness of one request |
 | **Soak** | memory/fd growth, latency drift over time | anything faster than a window |
@@ -671,7 +671,7 @@ $ .venv/bin/python scripts/preflight.py
   ✓ redis reachable, no modules (brute-force cosine, as designed)
 
 $ .venv/bin/python scripts/check_docs.py
-  all 186 checks passed
+  all 189 checks passed
 ```
 
 The 10 integration tests need a live Ollama — one also needs the `openai` SDK, because a
