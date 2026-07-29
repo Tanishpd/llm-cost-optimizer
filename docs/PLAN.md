@@ -973,6 +973,59 @@ found nothing here, because no assertion existed to mutate.
 
 823 unit tests, 179 doc checks.
 
+### M21 — The real-frontier calibration ✅ RUN (2026-07-29), partial
+
+The deferred item, finally run against a real provider. **The answer did not
+change: `should_flip()` is still False and the gateway stays in `raw`.** What
+changed is how well-founded that answer is — RESEARCH.md §3.5 has the numbers.
+
+Gate `large` reproduced M6 exactly (ECE 0.047, same Brier-vs-baseline failure).
+Gate `small` flipped PASS → FAIL, but the ECE intervals overlap heavily, so the
+two runs are not statistically distinguishable — what the flip shows is that
+M6's pass was never robust, not that anything degraded.
+
+**It stopped at 71/110.** The free tier caps at 20 requests per day *per model*
+(`GenerateRequestsPerDayPerProjectPerModel-FreeTier`), so 32 judged prompts
+were never collected. `--fit-only` exists now to fit whatever is cached without
+contacting a provider.
+
+**Eight bugs surfaced, every one silent**, in code that had never been run
+against a real API:
+
+    run_eval never read .env            os.getenv, against this project's own
+                                        convention; the file was ignored here
+                                        and honoured everywhere else
+    judge max_tokens hardcoded to 10    a REASONING model spends hidden thinking
+                                        tokens against that budget -> empty
+                                        string -> every verdict None -> 129 paid
+                                        calls, zero labels, no error
+    reference shared the local budget   references truncated to "The
+                                        mitochondrion is an"; the judge compared
+                                        full answers against four words
+    a partial run overwrote the         --limit 3 replaced eval/calibrator.json
+      production calibrator             with a 3-sample fit
+    --limit could not reach the         the dataset starts with auto-gradable
+      paid path                         prompts, so smoke tests only ran free ones
+    the judge parser was too literal    gemini-2.5-flash says ACCEPT/UNACCEPT,
+                                        the parser wanted ACCEPTABLE; it
+                                        discriminated perfectly and scored nothing
+    parse failures were undiagnosable   the raw verdict was discarded, so a
+                                        missing label could not be explained
+    429 bodies were truncated at 300    Gemini puts "retry in 23.7s" after ~430
+      chars, discarding the retry hint  chars of boilerplate, so backoff went
+                                        blind: 30+60+120+240+480s on ONE call,
+                                        then killed the run at 71/110 twice
+
+The last one was mine, introduced while fixing the one above it — I wrote
+hint-honouring backoff without checking the hint survived to the exception.
+
+**The evidence is now committed.** `eval/runs/full.json` was gitignored, so 119
+KB of paid API responses backing a documented result lived on one laptop with
+no way to recreate it that day. The docs said "never re-spend to recompute
+something already on disk"; that only holds if the disk is version-controlled.
+
+845 unit tests, 185 doc checks.
+
 ---
 
 ## Configuration surface
@@ -1016,6 +1069,9 @@ found nothing here, because no assertion existed to mutate.
 | `DEFAULT_DAILY_BUDGET_USD` | `0` | Cap for the implicit `default` and `anonymous` tenants. 0 = unlimited |
 | `SHADOW_SAMPLE_RATE` | `0.0` | Fraction of gate-accepted local answers re-run against the frontier to measure false-cheap. Off by default: it spends real money (D29) |
 | `SHADOW_DIVERGENCE_THRESHOLD` | `0.35` | Token overlap below which a shadow comparison counts as divergent |
+| `EVAL_JUDGE_MAX_TOKENS` | `64` | Eval only. A reasoning judge spends hidden thinking tokens against this; at 10 it returns nothing and every verdict parses as None |
+| `EVAL_REFERENCE_MAX_TOKENS` | `512` | Eval only. Separate from the local tiers' budget — a truncated reference makes the judge compare against a fragment |
+| `EVAL_MIN_CALL_INTERVAL_S` | `0.0` | Eval only. Pace under a rate limit rather than retry through it; Gemini's free tier is 20/min |
 | `CACHE_SCOPE` | `global` | `global` \| `tenant`. Global shares cached answers across tenants (the savings); tenant isolates them (D28) |
 | `MAX_DAILY_SPEND_USD` | `10.00` | **Armed by default.** The gateway's own daily ceiling across all tenants, bounding the cost of invariant 4. 0 disables |
 | `AUDIT_ENABLED` | `true` | Durable JSONL record of every routing decision, refusals included |

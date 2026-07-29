@@ -96,6 +96,31 @@ class Settings(BaseSettings):
     eval_judge_base_url: str = "https://api.anthropic.com/v1"
     eval_judge_model: str = "claude-sonnet-5"
     eval_judge_api_key: SecretStr = SecretStr("")
+    # The judge answers in one word, but a *reasoning* model spends hidden
+    # thinking tokens against this budget before emitting anything — and those
+    # do not show up in `completion_tokens`. At 10 (the old hardcoded value)
+    # gemini-3-flash-preview returned an empty string and every verdict parsed
+    # as None: 129 paid calls, zero labels, no error. 64 is ample for a
+    # one-word verdict and cheap enough not to matter.
+    eval_judge_max_tokens: int = 64
+    # The reference answer's budget, separate from the local tiers'.
+    #
+    # One knob used to drive both, which quietly broke the calibration against
+    # a reasoning model: at 120 the reference came back as
+    # "The mitochondrion is an" — a fragment — because ~490 tokens went to
+    # hidden reasoning. The judge then compared a full local answer against
+    # four words and produced garbage labels, or none.
+    #
+    # Local tiers must stay at the length production would generate; that is
+    # what is being calibrated. Only the reference needs the headroom.
+    eval_reference_max_tokens: int = 1024
+    # Seconds to wait between eval API calls. 0 = as fast as the provider
+    # allows, which is right for a paid tier.
+    #
+    # Free tiers are tight — Gemini's is 20 requests/minute — and retrying
+    # through a limit is slower and ruder than staying under it. 3.5s paces
+    # ~17/min, comfortably inside a 20/min window.
+    eval_min_call_interval_s: float = 0.0
 
     # ---- Security --------------------------------------------------------
     # Comma-separated. Empty means the gateway runs OPEN, which is only

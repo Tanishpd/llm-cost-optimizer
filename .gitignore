@@ -17,7 +17,14 @@ venv/
 # and re-running costs money. Keep the fitted calibrator, drop the raw runs.
 # (Must be `/*`, not the bare directory: git never descends into an excluded
 # directory, which would make the .gitkeep negation inert.)
+# Run caches. The auto-graded ones regenerate for free, so they stay out.
 eval/runs/*
+!eval/runs/full.json
+# ...but `full.json` is the paid evidence behind a documented result: real API
+# responses that cost quota, backing RESEARCH.md 3.5. It is 119 KB, contains no
+# credentials, and cannot be recreated without spending again. The docs say
+# "never re-spend to recompute something already on disk" — that only holds if
+# the disk is version-controlled.
 !eval/runs/.gitkeep
 
 # Local state

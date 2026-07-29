@@ -1,0 +1,4034 @@
+{
+  "fact-01": {
+    "id": "fact-01",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the capital of France? Answer with just the city name.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "Paris",
+        "features": {
+          "geo_mean": 0.941647,
+          "min_prob": 0.941647,
+          "p10_prob": 0.941647,
+          "mean_margin": 3.379761,
+          "mean_norm_entropy": 0.146841,
+          "frac_low": 0.0,
+          "n_tokens": 1
+        },
+        "tokens_in": 43,
+        "tokens_out": 2,
+        "latency_ms": 1568.9,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Paris",
+        "features": {
+          "geo_mean": 0.999937,
+          "min_prob": 0.999937,
+          "p10_prob": 0.999937,
+          "mean_margin": 9.887888,
+          "mean_norm_entropy": 0.000439,
+          "frac_low": 0.0,
+          "n_tokens": 1
+        },
+        "tokens_in": 43,
+        "tokens_out": 2,
+        "latency_ms": 2996.2,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Paris'",
+      "local_large": "contains expected answer 'Paris'"
+    }
+  },
+  "fact-02": {
+    "id": "fact-02",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the capital of Japan? Answer with just the city name.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "Tokyo",
+        "features": {
+          "geo_mean": 0.981665,
+          "min_prob": 0.964028,
+          "p10_prob": 0.967588,
+          "mean_margin": 6.685887,
+          "mean_norm_entropy": 0.054527,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 43,
+        "tokens_out": 3,
+        "latency_ms": 1267.6,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Tokyo",
+        "features": {
+          "geo_mean": 0.990752,
+          "min_prob": 0.981841,
+          "p10_prob": 0.983631,
+          "mean_margin": 6.199111,
+          "mean_norm_entropy": 0.031125,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 43,
+        "tokens_out": 3,
+        "latency_ms": 328.5,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Tokyo'",
+      "local_large": "contains expected answer 'Tokyo'"
+    }
+  },
+  "fact-03": {
+    "id": "fact-03",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the chemical symbol for gold? Answer with just the symbol.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "Au",
+        "features": {
+          "geo_mean": 0.994996,
+          "min_prob": 0.994996,
+          "p10_prob": 0.994996,
+          "mean_margin": 6.123657,
+          "mean_norm_entropy": 0.01805,
+          "frac_low": 0.0,
+          "n_tokens": 1
+        },
+        "tokens_in": 43,
+        "tokens_out": 2,
+        "latency_ms": 162.1,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Au",
+        "features": {
+          "geo_mean": 0.99664,
+          "min_prob": 0.99664,
+          "p10_prob": 0.99664,
+          "mean_margin": 6.177265,
+          "mean_norm_entropy": 0.015417,
+          "frac_low": 0.0,
+          "n_tokens": 1
+        },
+        "tokens_in": 43,
+        "tokens_out": 2,
+        "latency_ms": 373.6,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Au'",
+      "local_large": "contains expected answer 'Au'"
+    }
+  },
+  "fact-04": {
+    "id": "fact-04",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "How many continents are there? Answer with just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "There are 7 continents: Asia, Africa, North America, South America, Antarctica, Europe, and Oceania.",
+        "features": {
+          "geo_mean": 0.827832,
+          "min_prob": 0.412158,
+          "p10_prob": 0.553707,
+          "mean_margin": 5.21032,
+          "mean_norm_entropy": 0.235305,
+          "frac_low": 0.04,
+          "n_tokens": 25
+        },
+        "tokens_in": 41,
+        "tokens_out": 26,
+        "latency_ms": 645.1,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "5",
+        "features": {
+          "geo_mean": 0.878762,
+          "min_prob": 0.878762,
+          "p10_prob": 0.878762,
+          "mean_margin": 2.126001,
+          "mean_norm_entropy": 0.263066,
+          "frac_low": 0.0,
+          "n_tokens": 1
+        },
+        "tokens_in": 41,
+        "tokens_out": 2,
+        "latency_ms": 271.0,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": false
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer '7'",
+      "local_large": "none of ['7', 'seven'] found in answer"
+    }
+  },
+  "fact-05": {
+    "id": "fact-05",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What planet is known as the Red Planet? One word.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "Mars.",
+        "features": {
+          "geo_mean": 0.732109,
+          "min_prob": 0.601142,
+          "p10_prob": 0.611677,
+          "mean_margin": 3.395522,
+          "mean_norm_entropy": 0.286567,
+          "frac_low": 0.0,
+          "n_tokens": 3
+        },
+        "tokens_in": 41,
+        "tokens_out": 4,
+        "latency_ms": 191.5,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Mars",
+        "features": {
+          "geo_mean": 0.999729,
+          "min_prob": 0.999486,
+          "p10_prob": 0.999534,
+          "mean_margin": 9.456596,
+          "mean_norm_entropy": 0.001546,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 41,
+        "tokens_out": 3,
+        "latency_ms": 299.6,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Mars'",
+      "local_large": "contains expected answer 'Mars'"
+    }
+  },
+  "fact-06": {
+    "id": "fact-06",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "Who wrote the play Hamlet? Just the name.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The play \"Hamlet\" was written by William Shakespeare. He lived from 1564 to 1616 and is one of the most famous playwrights in world literature. His works often explore themes such as love, revenge, and the human condition through complex characters and dramatic plots.",
+        "features": {
+          "geo_mean": 0.572604,
+          "min_prob": 0.092705,
+          "p10_prob": 0.208031,
+          "mean_margin": 3.654301,
+          "mean_norm_entropy": 0.379869,
+          "frac_low": 0.327869,
+          "n_tokens": 61
+        },
+        "tokens_in": 40,
+        "tokens_out": 62,
+        "latency_ms": 1242.6,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "William Shakespeare",
+        "features": {
+          "geo_mean": 0.996174,
+          "min_prob": 0.992375,
+          "p10_prob": 0.993136,
+          "mean_margin": 8.563328,
+          "mean_norm_entropy": 0.015598,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 40,
+        "tokens_out": 3,
+        "latency_ms": 331.2,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Shakespeare'",
+      "local_large": "contains expected answer 'Shakespeare'"
+    }
+  },
+  "fact-07": {
+    "id": "fact-07",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the largest ocean on Earth? Just the name.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The largest ocean on Earth is the Pacific Ocean. It covers an area of approximately 147 million square kilometers and is located between North America and Asia. The Pacific Ocean is known for its vastness, depth, and abundance of marine life due to its extensive coastline and numerous islands.",
+        "features": {
+          "geo_mean": 0.552133,
+          "min_prob": 0.055818,
+          "p10_prob": 0.171119,
+          "mean_margin": 2.65779,
+          "mean_norm_entropy": 0.41267,
+          "frac_low": 0.293103,
+          "n_tokens": 58
+        },
+        "tokens_in": 41,
+        "tokens_out": 59,
+        "latency_ms": 1196.8,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Pacific Ocean",
+        "features": {
+          "geo_mean": 0.829997,
+          "min_prob": 0.752956,
+          "p10_prob": 0.769152,
+          "mean_margin": 2.038998,
+          "mean_norm_entropy": 0.326699,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 41,
+        "tokens_out": 3,
+        "latency_ms": 321.9,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Pacific'",
+      "local_large": "contains expected answer 'Pacific'"
+    }
+  },
+  "fact-08": {
+    "id": "fact-08",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What gas do plants absorb from the atmosphere? Just the name.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "Plants absorb carbon dioxide (CO2) from the atmosphere through a process called photosynthesis. This absorption is crucial for maintaining the balance of atmospheric gases and plays a significant role in regulating global climate patterns. Plants also play a vital role in sequestering carbon dioxide, which helps mitigate the effects of climate change.",
+        "features": {
+          "geo_mean": 0.552662,
+          "min_prob": 0.07064,
+          "p10_prob": 0.155354,
+          "mean_margin": 3.059183,
+          "mean_norm_entropy": 0.404837,
+          "frac_low": 0.301587,
+          "n_tokens": 63
+        },
+        "tokens_in": 42,
+        "tokens_out": 64,
+        "latency_ms": 1285.3,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Carbon dioxide",
+        "features": {
+          "geo_mean": 0.868609,
+          "min_prob": 0.767859,
+          "p10_prob": 0.789331,
+          "mean_margin": 2.813147,
+          "mean_norm_entropy": 0.246154,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 42,
+        "tokens_out": 3,
+        "latency_ms": 327.6,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'carbon dioxide'",
+      "local_large": "contains expected answer 'carbon dioxide'"
+    }
+  },
+  "fact-09": {
+    "id": "fact-09",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "In which country is the Great Pyramid of Giza? Just the country.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The Great Pyramid of Giza is located in Egypt. It was built during the 25th century BC and stands as one of the most iconic structures in the world, standing at an impressive height of about 137 meters (453 feet) and weighing around 96 million tons.",
+        "features": {
+          "geo_mean": 0.5586,
+          "min_prob": 0.102105,
+          "p10_prob": 0.209855,
+          "mean_margin": 2.686078,
+          "mean_norm_entropy": 0.43974,
+          "frac_low": 0.33871,
+          "n_tokens": 62
+        },
+        "tokens_in": 44,
+        "tokens_out": 63,
+        "latency_ms": 1240.9,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Egypt",
+        "features": {
+          "geo_mean": 0.999666,
+          "min_prob": 0.999666,
+          "p10_prob": 0.999666,
+          "mean_margin": 8.761584,
+          "mean_norm_entropy": 0.002052,
+          "frac_low": 0.0,
+          "n_tokens": 1
+        },
+        "tokens_in": 44,
+        "tokens_out": 2,
+        "latency_ms": 288.4,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Egypt'",
+      "local_large": "contains expected answer 'Egypt'"
+    }
+  },
+  "fact-10": {
+    "id": "fact-10",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the freezing point of water in Celsius? Just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The freezing point of water is 0\u00b0C.",
+        "features": {
+          "geo_mean": 0.838716,
+          "min_prob": 0.506028,
+          "p10_prob": 0.583827,
+          "mean_margin": 5.164395,
+          "mean_norm_entropy": 0.21485,
+          "frac_low": 0.0,
+          "n_tokens": 10
+        },
+        "tokens_in": 43,
+        "tokens_out": 11,
+        "latency_ms": 327.8,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "0",
+        "features": {
+          "geo_mean": 1.0,
+          "min_prob": 1.0,
+          "p10_prob": 1.0,
+          "mean_margin": 18.644257,
+          "mean_norm_entropy": 0.0,
+          "frac_low": 0.0,
+          "n_tokens": 1
+        },
+        "tokens_in": 43,
+        "tokens_out": 2,
+        "latency_ms": 288.6,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer '0'",
+      "local_large": "contains expected answer '0'"
+    }
+  },
+  "fact-11": {
+    "id": "fact-11",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "How many sides does a hexagon have? Just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "A hexagon is a polygon with six sides. Therefore, the answer is 6.",
+        "features": {
+          "geo_mean": 0.790121,
+          "min_prob": 0.335425,
+          "p10_prob": 0.481114,
+          "mean_margin": 3.85109,
+          "mean_norm_entropy": 0.249804,
+          "frac_low": 0.111111,
+          "n_tokens": 18
+        },
+        "tokens_in": 42,
+        "tokens_out": 19,
+        "latency_ms": 635.5,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "A hexagon has 6 sides.",
+        "features": {
+          "geo_mean": 0.999798,
+          "min_prob": 0.99849,
+          "p10_prob": 0.999472,
+          "mean_margin": 16.297703,
+          "mean_norm_entropy": 0.001047,
+          "frac_low": 0.0,
+          "n_tokens": 8
+        },
+        "tokens_in": 42,
+        "tokens_out": 9,
+        "latency_ms": 549.5,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer '6'",
+      "local_large": "contains expected answer '6'"
+    }
+  },
+  "fact-12": {
+    "id": "fact-12",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the currency of the United Kingdom? Just the name.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The currency of the United Kingdom is the pound sterling (GBP).",
+        "features": {
+          "geo_mean": 0.752302,
+          "min_prob": 0.248935,
+          "p10_prob": 0.405062,
+          "mean_margin": 4.518259,
+          "mean_norm_entropy": 0.26189,
+          "frac_low": 0.153846,
+          "n_tokens": 13
+        },
+        "tokens_in": 42,
+        "tokens_out": 14,
+        "latency_ms": 380.9,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Pound Sterling",
+        "features": {
+          "geo_mean": 0.977183,
+          "min_prob": 0.939268,
+          "p10_prob": 0.950184,
+          "mean_margin": 5.566437,
+          "mean_norm_entropy": 0.056682,
+          "frac_low": 0.0,
+          "n_tokens": 3
+        },
+        "tokens_in": 42,
+        "tokens_out": 4,
+        "latency_ms": 349.5,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'pound'",
+      "local_large": "contains expected answer 'pound'"
+    }
+  },
+  "fact-13": {
+    "id": "fact-13",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "Which element has the atomic number 1? Just the name.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The element with an atomic number of 1 is **Iron (Fe)**. Iron is a chemical element with the symbol Fe and atomic number 26, which means it consists of 26 protons in its nucleus.",
+        "features": {
+          "geo_mean": 0.696835,
+          "min_prob": 0.10504,
+          "p10_prob": 0.314301,
+          "mean_margin": 4.094772,
+          "mean_norm_entropy": 0.24846,
+          "frac_low": 0.23913,
+          "n_tokens": 46
+        },
+        "tokens_in": 42,
+        "tokens_out": 47,
+        "latency_ms": 1081.2,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Hydrogen",
+        "features": {
+          "geo_mean": 0.972765,
+          "min_prob": 0.920548,
+          "p10_prob": 0.936428,
+          "mean_margin": 9.352489,
+          "mean_norm_entropy": 0.073332,
+          "frac_low": 0.0,
+          "n_tokens": 3
+        },
+        "tokens_in": 42,
+        "tokens_out": 4,
+        "latency_ms": 360.2,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": false,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "none of ['hydrogen'] found in answer",
+      "local_large": "contains expected answer 'hydrogen'"
+    }
+  },
+  "fact-14": {
+    "id": "fact-14",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the tallest mountain above sea level? Just the name.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "Mount Everest.",
+        "features": {
+          "geo_mean": 0.573486,
+          "min_prob": 0.500178,
+          "p10_prob": 0.501249,
+          "mean_margin": 1.3571,
+          "mean_norm_entropy": 0.576953,
+          "frac_low": 0.0,
+          "n_tokens": 3
+        },
+        "tokens_in": 42,
+        "tokens_out": 4,
+        "latency_ms": 207.6,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Mount Everest",
+        "features": {
+          "geo_mean": 0.992419,
+          "min_prob": 0.985168,
+          "p10_prob": 0.986624,
+          "mean_margin": 6.690141,
+          "mean_norm_entropy": 0.027514,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 42,
+        "tokens_out": 3,
+        "latency_ms": 302.7,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Everest'",
+      "local_large": "contains expected answer 'Everest'"
+    }
+  },
+  "fact-15": {
+    "id": "fact-15",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "Who painted the Mona Lisa? Just the name.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The Mona Lisa is a famous painting by Leonardo da Vinci, and it was not painted by any single artist. The Mona Lisa is a work of art that has been attributed to several artists over the centuries, including Leonardo da Vinci, Michelangelo, and others. Each artist had their own unique style and techniques for creating the Mona Lisa, resulting in a complex and multifaceted artwork.",
+        "features": {
+          "geo_mean": 0.543281,
+          "min_prob": 0.119994,
+          "p10_prob": 0.204456,
+          "mean_margin": 2.572778,
+          "mean_norm_entropy": 0.486613,
+          "frac_low": 0.337662,
+          "n_tokens": 77
+        },
+        "tokens_in": 39,
+        "tokens_out": 78,
+        "latency_ms": 1610.7,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Leonardo da Vinci",
+        "features": {
+          "geo_mean": 0.994353,
+          "min_prob": 0.982822,
+          "p10_prob": 0.986737,
+          "mean_margin": 7.750666,
+          "mean_norm_entropy": 0.019756,
+          "frac_low": 0.0,
+          "n_tokens": 4
+        },
+        "tokens_in": 39,
+        "tokens_out": 5,
+        "latency_ms": 397.7,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'da Vinci'",
+      "local_large": "contains expected answer 'da Vinci'"
+    }
+  },
+  "fact-16": {
+    "id": "fact-16",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the largest mammal? Just the name.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The largest mammal among all animals is the blue whale (Balaenoptera musculus). It can grow up to 100 feet in length and weigh over 250 tons, making it one of the heaviest animals on Earth. Blue whales are known for their long necks and powerful bodies, which help them reach great heights while feeding.",
+        "features": {
+          "geo_mean": 0.54706,
+          "min_prob": 0.082607,
+          "p10_prob": 0.183284,
+          "mean_margin": 2.884626,
+          "mean_norm_entropy": 0.403333,
+          "frac_low": 0.324324,
+          "n_tokens": 74
+        },
+        "tokens_in": 40,
+        "tokens_out": 75,
+        "latency_ms": 1600.6,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "The largest mammal is the Whale, specifically the Blue Whale.",
+        "features": {
+          "geo_mean": 0.877059,
+          "min_prob": 0.455243,
+          "p10_prob": 0.602973,
+          "mean_margin": 7.211077,
+          "mean_norm_entropy": 0.151681,
+          "frac_low": 0.076923,
+          "n_tokens": 13
+        },
+        "tokens_in": 40,
+        "tokens_out": 14,
+        "latency_ms": 735.1,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'blue whale'",
+      "local_large": "contains expected answer 'blue whale'"
+    }
+  },
+  "fact-17": {
+    "id": "fact-17",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "How many minutes are in a full day? Just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "A full day consists of 24 hours, which is equivalent to 1440 minutes.",
+        "features": {
+          "geo_mean": 0.893055,
+          "min_prob": 0.614622,
+          "p10_prob": 0.638673,
+          "mean_margin": 5.306776,
+          "mean_norm_entropy": 0.171978,
+          "frac_low": 0.0,
+          "n_tokens": 21
+        },
+        "tokens_in": 42,
+        "tokens_out": 22,
+        "latency_ms": 576.0,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "1440",
+        "features": {
+          "geo_mean": 0.999952,
+          "min_prob": 0.99981,
+          "p10_prob": 0.999867,
+          "mean_margin": 15.921015,
+          "mean_norm_entropy": 0.000284,
+          "frac_low": 0.0,
+          "n_tokens": 4
+        },
+        "tokens_in": 42,
+        "tokens_out": 5,
+        "latency_ms": 412.9,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer '1440'",
+      "local_large": "contains expected answer '1440'"
+    }
+  },
+  "fact-18": {
+    "id": "fact-18",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What language has the most native speakers? Just the language.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "English is the language with the most native speakers globally. It is spoken by an estimated 3.7 billion people worldwide, making it one of the most widely spoken languages in the world. However, it's important to note that this number can vary depending on factors such as age, education level, and geographic location. Additionally, some languages may have a smaller or larger number of native speakers than English due to their unique characteristics and cultural significance.",
+        "features": {
+          "geo_mean": 0.560803,
+          "min_prob": 0.12704,
+          "p10_prob": 0.207236,
+          "mean_margin": 3.225323,
+          "mean_norm_entropy": 0.425882,
+          "frac_low": 0.337079,
+          "n_tokens": 89
+        },
+        "tokens_in": 41,
+        "tokens_out": 90,
+        "latency_ms": 2064.9,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "The language with the largest number of native speakers is Mandarin Chinese.",
+        "features": {
+          "geo_mean": 0.81336,
+          "min_prob": 0.075743,
+          "p10_prob": 0.942807,
+          "mean_margin": 8.778813,
+          "mean_norm_entropy": 0.035418,
+          "frac_low": 0.076923,
+          "n_tokens": 13
+        },
+        "tokens_in": 41,
+        "tokens_out": 14,
+        "latency_ms": 772.1,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": false,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "none of ['Mandarin', 'Chinese'] found in answer",
+      "local_large": "contains expected answer 'Mandarin'"
+    }
+  },
+  "fact-19": {
+    "id": "fact-19",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the square root of 144? Just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The square root of 144 is 12. This can be calculated as follows:\n\n\\[ \\sqrt{144} = 12 \\]\n\nThis means that \\( 12^2 = 144 \\).",
+        "features": {
+          "geo_mean": 0.768384,
+          "min_prob": 0.129706,
+          "p10_prob": 0.381589,
+          "mean_margin": 6.017221,
+          "mean_norm_entropy": 0.189562,
+          "frac_low": 0.18,
+          "n_tokens": 50
+        },
+        "tokens_in": 44,
+        "tokens_out": 51,
+        "latency_ms": 1046.0,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "12",
+        "features": {
+          "geo_mean": 1.0,
+          "min_prob": 1.0,
+          "p10_prob": 1.0,
+          "mean_margin": 20.710042,
+          "mean_norm_entropy": 0.0,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 44,
+        "tokens_out": 3,
+        "latency_ms": 308.4,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer '12'",
+      "local_large": "contains expected answer '12'"
+    }
+  },
+  "fact-20": {
+    "id": "fact-20",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "Which organ pumps blood around the body? Just the organ.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The heart is the organ that pumps blood around the body. It has four chambers: two atria and two ventricles. The left side of the heart receives deoxygenated blood from the body, while the right side pumps oxygenated blood to the lungs for gas exchange. This process continues throughout the circulatory system, ensuring that all parts of the body receive adequate blood flow.",
+        "features": {
+          "geo_mean": 0.610189,
+          "min_prob": 0.086466,
+          "p10_prob": 0.216361,
+          "mean_margin": 3.398911,
+          "mean_norm_entropy": 0.362058,
+          "frac_low": 0.269231,
+          "n_tokens": 78
+        },
+        "tokens_in": 41,
+        "tokens_out": 79,
+        "latency_ms": 1695.8,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Heart",
+        "features": {
+          "geo_mean": 0.923149,
+          "min_prob": 0.923149,
+          "p10_prob": 0.923149,
+          "mean_margin": 2.555679,
+          "mean_norm_entropy": 0.180413,
+          "frac_low": 0.0,
+          "n_tokens": 1
+        },
+        "tokens_in": 41,
+        "tokens_out": 2,
+        "latency_ms": 345.0,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'heart'",
+      "local_large": "contains expected answer 'heart'"
+    }
+  },
+  "fact-21": {
+    "id": "fact-21",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the capital of Australia? Just the city.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The capital of Australia is Canberra.",
+        "features": {
+          "geo_mean": 0.918991,
+          "min_prob": 0.682486,
+          "p10_prob": 0.819009,
+          "mean_margin": 3.953861,
+          "mean_norm_entropy": 0.14623,
+          "frac_low": 0.0,
+          "n_tokens": 7
+        },
+        "tokens_in": 40,
+        "tokens_out": 8,
+        "latency_ms": 318.1,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Canberra",
+        "features": {
+          "geo_mean": 0.998039,
+          "min_prob": 0.996188,
+          "p10_prob": 0.996558,
+          "mean_margin": 7.793304,
+          "mean_norm_entropy": 0.008104,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 40,
+        "tokens_out": 3,
+        "latency_ms": 329.2,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Canberra'",
+      "local_large": "contains expected answer 'Canberra'"
+    }
+  },
+  "fact-22": {
+    "id": "fact-22",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the capital of Austria? Just the city.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The capital of Austria is Vienna.",
+        "features": {
+          "geo_mean": 0.945891,
+          "min_prob": 0.85156,
+          "p10_prob": 0.885451,
+          "mean_margin": 4.295325,
+          "mean_norm_entropy": 0.112197,
+          "frac_low": 0.0,
+          "n_tokens": 7
+        },
+        "tokens_in": 40,
+        "tokens_out": 8,
+        "latency_ms": 342.2,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Vienna",
+        "features": {
+          "geo_mean": 0.99945,
+          "min_prob": 0.998901,
+          "p10_prob": 0.999011,
+          "mean_margin": 10.473506,
+          "mean_norm_entropy": 0.002846,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 40,
+        "tokens_out": 3,
+        "latency_ms": 343.7,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Vienna'",
+      "local_large": "contains expected answer 'Vienna'"
+    }
+  },
+  "fact-23": {
+    "id": "fact-23",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the capital of Canada? Just the city.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The capital of Canada is Ottawa.",
+        "features": {
+          "geo_mean": 0.944554,
+          "min_prob": 0.862405,
+          "p10_prob": 0.894903,
+          "mean_margin": 4.313968,
+          "mean_norm_entropy": 0.113997,
+          "frac_low": 0.0,
+          "n_tokens": 7
+        },
+        "tokens_in": 40,
+        "tokens_out": 8,
+        "latency_ms": 306.8,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Ottawa",
+        "features": {
+          "geo_mean": 0.992186,
+          "min_prob": 0.97691,
+          "p10_prob": 0.981495,
+          "mean_margin": 8.2704,
+          "mean_norm_entropy": 0.026121,
+          "frac_low": 0.0,
+          "n_tokens": 3
+        },
+        "tokens_in": 40,
+        "tokens_out": 4,
+        "latency_ms": 452.2,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Ottawa'",
+      "local_large": "contains expected answer 'Ottawa'"
+    }
+  },
+  "fact-24": {
+    "id": "fact-24",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the capital of Brazil? Just the city.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The capital of Brazil is Bras\u00edlia. It's located in the state of Bahia and is known for its modern architecture, extensive public transportation system, and its role as a major economic center in South America. Bras\u00edlia was designed by Brazilian architect Oscar Niemeyer and Brazilian engineer Santiago Calatrava, and it became the official capital of Brazil on January 16, 1960.",
+        "features": {
+          "geo_mean": 0.504003,
+          "min_prob": 0.082059,
+          "p10_prob": 0.137508,
+          "mean_margin": 2.81169,
+          "mean_norm_entropy": 0.434487,
+          "frac_low": 0.419753,
+          "n_tokens": 81
+        },
+        "tokens_in": 40,
+        "tokens_out": 82,
+        "latency_ms": 2188.9,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "S\u00e3o Paulo",
+        "features": {
+          "geo_mean": 0.891755,
+          "min_prob": 0.727765,
+          "p10_prob": 0.77712,
+          "mean_margin": 4.879924,
+          "mean_norm_entropy": 0.189995,
+          "frac_low": 0.0,
+          "n_tokens": 3
+        },
+        "tokens_in": 40,
+        "tokens_out": 4,
+        "latency_ms": 413.9,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": false
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Brasilia'",
+      "local_large": "contains the plausible-but-wrong answer 'Sao Paulo'"
+    }
+  },
+  "fact-25": {
+    "id": "fact-25",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the capital of Turkey? Just the city.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The capital of Turkey is Ankara.",
+        "features": {
+          "geo_mean": 0.930452,
+          "min_prob": 0.736522,
+          "p10_prob": 0.862738,
+          "mean_margin": 3.858872,
+          "mean_norm_entropy": 0.136019,
+          "frac_low": 0.0,
+          "n_tokens": 7
+        },
+        "tokens_in": 40,
+        "tokens_out": 8,
+        "latency_ms": 278.4,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Ankara",
+        "features": {
+          "geo_mean": 0.741729,
+          "min_prob": 0.408308,
+          "p10_prob": 0.526534,
+          "mean_margin": 6.993173,
+          "mean_norm_entropy": 0.289094,
+          "frac_low": 0.333333,
+          "n_tokens": 3
+        },
+        "tokens_in": 40,
+        "tokens_out": 4,
+        "latency_ms": 355.7,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Ankara'",
+      "local_large": "contains expected answer 'Ankara'"
+    }
+  },
+  "fact-26": {
+    "id": "fact-26",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the capital of Switzerland? Just the city.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The capital of Switzerland is Bern.",
+        "features": {
+          "geo_mean": 0.89126,
+          "min_prob": 0.708498,
+          "p10_prob": 0.73586,
+          "mean_margin": 4.009571,
+          "mean_norm_entropy": 0.203161,
+          "frac_low": 0.0,
+          "n_tokens": 7
+        },
+        "tokens_in": 40,
+        "tokens_out": 8,
+        "latency_ms": 275.9,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Zurich",
+        "features": {
+          "geo_mean": 0.745337,
+          "min_prob": 0.638075,
+          "p10_prob": 0.640252,
+          "mean_margin": 3.748635,
+          "mean_norm_entropy": 0.283758,
+          "frac_low": 0.0,
+          "n_tokens": 3
+        },
+        "tokens_in": 40,
+        "tokens_out": 4,
+        "latency_ms": 357.3,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": false
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Bern'",
+      "local_large": "contains the plausible-but-wrong answer 'Zurich'"
+    }
+  },
+  "fact-27": {
+    "id": "fact-27",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the capital of New Zealand? Just the city.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The capital of New Zealand is Wellington.",
+        "features": {
+          "geo_mean": 0.901486,
+          "min_prob": 0.691665,
+          "p10_prob": 0.778911,
+          "mean_margin": 4.754367,
+          "mean_norm_entropy": 0.156253,
+          "frac_low": 0.0,
+          "n_tokens": 8
+        },
+        "tokens_in": 41,
+        "tokens_out": 9,
+        "latency_ms": 281.8,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Wellington",
+        "features": {
+          "geo_mean": 0.981492,
+          "min_prob": 0.964132,
+          "p10_prob": 0.967635,
+          "mean_margin": 5.481486,
+          "mean_norm_entropy": 0.054734,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 41,
+        "tokens_out": 3,
+        "latency_ms": 302.0,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Wellington'",
+      "local_large": "contains expected answer 'Wellington'"
+    }
+  },
+  "fact-28": {
+    "id": "fact-28",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the capital of Morocco? Just the city.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The capital of Morocco is Rabat.",
+        "features": {
+          "geo_mean": 0.901845,
+          "min_prob": 0.600867,
+          "p10_prob": 0.778799,
+          "mean_margin": 4.23401,
+          "mean_norm_entropy": 0.153316,
+          "frac_low": 0.0,
+          "n_tokens": 8
+        },
+        "tokens_in": 40,
+        "tokens_out": 9,
+        "latency_ms": 282.5,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Rabat",
+        "features": {
+          "geo_mean": 0.985549,
+          "min_prob": 0.958365,
+          "p10_prob": 0.966465,
+          "mean_margin": 8.11065,
+          "mean_norm_entropy": 0.04191,
+          "frac_low": 0.0,
+          "n_tokens": 3
+        },
+        "tokens_in": 40,
+        "tokens_out": 4,
+        "latency_ms": 343.8,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Rabat'",
+      "local_large": "contains expected answer 'Rabat'"
+    }
+  },
+  "fact-29": {
+    "id": "fact-29",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the capital of Nigeria? Just the city.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The capital of Nigeria is Abuja.",
+        "features": {
+          "geo_mean": 0.940165,
+          "min_prob": 0.787246,
+          "p10_prob": 0.876295,
+          "mean_margin": 4.545751,
+          "mean_norm_entropy": 0.11762,
+          "frac_low": 0.0,
+          "n_tokens": 8
+        },
+        "tokens_in": 40,
+        "tokens_out": 9,
+        "latency_ms": 288.9,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Abuja",
+        "features": {
+          "geo_mean": 0.998048,
+          "min_prob": 0.996613,
+          "p10_prob": 0.996901,
+          "mean_margin": 7.05471,
+          "mean_norm_entropy": 0.008429,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 40,
+        "tokens_out": 3,
+        "latency_ms": 309.3,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Abuja'",
+      "local_large": "contains expected answer 'Abuja'"
+    }
+  },
+  "fact-30": {
+    "id": "fact-30",
+    "category": "easy_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the capital of Myanmar? Just the city.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The capital of Myanmar (also known as Burma) is Naypyidaw. It's located in the northeastern part of the country and serves as the administrative center for the entire country. The city of Naypyidaw is situated on the banks of the Irrawaddy River, which flows through the heart of the country.",
+        "features": {
+          "geo_mean": 0.561931,
+          "min_prob": 0.087594,
+          "p10_prob": 0.1743,
+          "mean_margin": 2.916238,
+          "mean_norm_entropy": 0.370771,
+          "frac_low": 0.323077,
+          "n_tokens": 65
+        },
+        "tokens_in": 40,
+        "tokens_out": 66,
+        "latency_ms": 1319.6,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Yangon",
+        "features": {
+          "geo_mean": 0.9475,
+          "min_prob": 0.897758,
+          "p10_prob": 0.907982,
+          "mean_margin": 8.576458,
+          "mean_norm_entropy": 0.134835,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 40,
+        "tokens_out": 3,
+        "latency_ms": 326.2,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": false
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Naypyidaw'",
+      "local_large": "contains the plausible-but-wrong answer 'Yangon'"
+    }
+  },
+  "arith-01": {
+    "id": "arith-01",
+    "category": "arithmetic",
+    "grade_mode": "auto",
+    "prompt": "What is 2 + 2? Just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The result of adding 2 and 2 is 4.",
+        "features": {
+          "geo_mean": 0.683284,
+          "min_prob": 0.137818,
+          "p10_prob": 0.236607,
+          "mean_margin": 5.368665,
+          "mean_norm_entropy": 0.178977,
+          "frac_low": 0.230769,
+          "n_tokens": 13
+        },
+        "tokens_in": 41,
+        "tokens_out": 14,
+        "latency_ms": 390.9,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "4",
+        "features": {
+          "geo_mean": 0.999952,
+          "min_prob": 0.999952,
+          "p10_prob": 0.999952,
+          "mean_margin": 9.936295,
+          "mean_norm_entropy": 0.000329,
+          "frac_low": 0.0,
+          "n_tokens": 1
+        },
+        "tokens_in": 41,
+        "tokens_out": 2,
+        "latency_ms": 283.6,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer '4'",
+      "local_large": "contains expected answer '4'"
+    }
+  },
+  "arith-02": {
+    "id": "arith-02",
+    "category": "arithmetic",
+    "grade_mode": "auto",
+    "prompt": "What is 17 * 3? Just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The result of multiplying 17 by 3 is 51.",
+        "features": {
+          "geo_mean": 0.761689,
+          "min_prob": 0.096155,
+          "p10_prob": 0.4433,
+          "mean_margin": 6.928651,
+          "mean_norm_entropy": 0.127033,
+          "frac_low": 0.133333,
+          "n_tokens": 15
+        },
+        "tokens_in": 42,
+        "tokens_out": 16,
+        "latency_ms": 414.0,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "51",
+        "features": {
+          "geo_mean": 1.0,
+          "min_prob": 1.0,
+          "p10_prob": 1.0,
+          "mean_margin": 19.153756,
+          "mean_norm_entropy": 0.0,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 42,
+        "tokens_out": 3,
+        "latency_ms": 303.3,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer '51'",
+      "local_large": "contains expected answer '51'"
+    }
+  },
+  "arith-03": {
+    "id": "arith-03",
+    "category": "arithmetic",
+    "grade_mode": "auto",
+    "prompt": "What is 144 / 12? Just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The result of dividing 144 by 12 is 12.",
+        "features": {
+          "geo_mean": 0.784012,
+          "min_prob": 0.086468,
+          "p10_prob": 0.559269,
+          "mean_margin": 7.945942,
+          "mean_norm_entropy": 0.099857,
+          "frac_low": 0.117647,
+          "n_tokens": 17
+        },
+        "tokens_in": 44,
+        "tokens_out": 18,
+        "latency_ms": 447.6,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "12",
+        "features": {
+          "geo_mean": 1.0,
+          "min_prob": 1.0,
+          "p10_prob": 1.0,
+          "mean_margin": 22.219852,
+          "mean_norm_entropy": 0.0,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 44,
+        "tokens_out": 3,
+        "latency_ms": 304.1,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer '12'",
+      "local_large": "contains expected answer '12'"
+    }
+  },
+  "arith-04": {
+    "id": "arith-04",
+    "category": "arithmetic",
+    "grade_mode": "auto",
+    "prompt": "What is 25% of 200? Just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "To find 25% of 200, you can follow these steps:\n\n1. Convert the percentage to a decimal: \\( 25\\% = \\frac{25}{100} = 0.25 \\).\n\n2. Multiply the decimal by the number: \\( 0.25 \\times 200 = 50 \\).\n\nSo, 25% of 200 is 50.",
+        "features": {
+          "geo_mean": 0.897419,
+          "min_prob": 0.190725,
+          "p10_prob": 0.715286,
+          "mean_margin": 8.100148,
+          "mean_norm_entropy": 0.100923,
+          "frac_low": 0.052632,
+          "n_tokens": 95
+        },
+        "tokens_in": 45,
+        "tokens_out": 96,
+        "latency_ms": 1856.8,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "50",
+        "features": {
+          "geo_mean": 0.999999,
+          "min_prob": 0.999999,
+          "p10_prob": 0.999999,
+          "mean_margin": 14.719269,
+          "mean_norm_entropy": 5e-06,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 45,
+        "tokens_out": 3,
+        "latency_ms": 312.4,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer '50'",
+      "local_large": "contains expected answer '50'"
+    }
+  },
+  "arith-05": {
+    "id": "arith-05",
+    "category": "arithmetic",
+    "grade_mode": "auto",
+    "prompt": "What is 7 squared? Just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The square of 7 is \\( 7^2 = 49 \\).",
+        "features": {
+          "geo_mean": 0.70818,
+          "min_prob": 0.131882,
+          "p10_prob": 0.348678,
+          "mean_margin": 4.725009,
+          "mean_norm_entropy": 0.231312,
+          "frac_low": 0.176471,
+          "n_tokens": 17
+        },
+        "tokens_in": 39,
+        "tokens_out": 18,
+        "latency_ms": 453.3,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "49",
+        "features": {
+          "geo_mean": 1.0,
+          "min_prob": 1.0,
+          "p10_prob": 1.0,
+          "mean_margin": 17.406856,
+          "mean_norm_entropy": 2e-06,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 39,
+        "tokens_out": 3,
+        "latency_ms": 312.2,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer '49'",
+      "local_large": "contains expected answer '49'"
+    }
+  },
+  "arith-06": {
+    "id": "arith-06",
+    "category": "arithmetic",
+    "grade_mode": "auto",
+    "prompt": "What is 1000 - 375? Just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The result of 1000 minus 375 is:\n\n625",
+        "features": {
+          "geo_mean": 0.675274,
+          "min_prob": 0.092874,
+          "p10_prob": 0.230654,
+          "mean_margin": 8.180228,
+          "mean_norm_entropy": 0.152605,
+          "frac_low": 0.222222,
+          "n_tokens": 18
+        },
+        "tokens_in": 46,
+        "tokens_out": 19,
+        "latency_ms": 469.5,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "625",
+        "features": {
+          "geo_mean": 1.0,
+          "min_prob": 1.0,
+          "p10_prob": 1.0,
+          "mean_margin": 21.944971,
+          "mean_norm_entropy": 0.0,
+          "frac_low": 0.0,
+          "n_tokens": 3
+        },
+        "tokens_in": 46,
+        "tokens_out": 4,
+        "latency_ms": 348.4,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer '625'",
+      "local_large": "contains expected answer '625'"
+    }
+  },
+  "arith-07": {
+    "id": "arith-07",
+    "category": "arithmetic",
+    "grade_mode": "auto",
+    "prompt": "What is 13 * 13? Just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The result of multiplying 13 by itself (13 * 13) is 169.",
+        "features": {
+          "geo_mean": 0.686491,
+          "min_prob": 0.074268,
+          "p10_prob": 0.220902,
+          "mean_margin": 6.768792,
+          "mean_norm_entropy": 0.1318,
+          "frac_low": 0.217391,
+          "n_tokens": 23
+        },
+        "tokens_in": 43,
+        "tokens_out": 24,
+        "latency_ms": 560.0,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "169",
+        "features": {
+          "geo_mean": 1.0,
+          "min_prob": 1.0,
+          "p10_prob": 1.0,
+          "mean_margin": 17.576163,
+          "mean_norm_entropy": 1e-06,
+          "frac_low": 0.0,
+          "n_tokens": 3
+        },
+        "tokens_in": 43,
+        "tokens_out": 4,
+        "latency_ms": 342.5,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer '169'",
+      "local_large": "contains expected answer '169'"
+    }
+  },
+  "arith-08": {
+    "id": "arith-08",
+    "category": "arithmetic",
+    "grade_mode": "auto",
+    "prompt": "What is 2 to the power of 10? Just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The value of \\(2^{10}\\) is 1024. This can be calculated as follows:\n\n\\[2^{10} = 1024\\]",
+        "features": {
+          "geo_mean": 0.721556,
+          "min_prob": 0.108308,
+          "p10_prob": 0.427435,
+          "mean_margin": 4.788717,
+          "mean_norm_entropy": 0.223138,
+          "frac_low": 0.105263,
+          "n_tokens": 38
+        },
+        "tokens_in": 45,
+        "tokens_out": 39,
+        "latency_ms": 821.8,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "1024",
+        "features": {
+          "geo_mean": 0.99998,
+          "min_prob": 0.99992,
+          "p10_prob": 0.999944,
+          "mean_margin": 16.985646,
+          "mean_norm_entropy": 0.000131,
+          "frac_low": 0.0,
+          "n_tokens": 4
+        },
+        "tokens_in": 45,
+        "tokens_out": 5,
+        "latency_ms": 380.4,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer '1024'",
+      "local_large": "contains expected answer '1024'"
+    }
+  },
+  "arith-09": {
+    "id": "arith-09",
+    "category": "arithmetic",
+    "grade_mode": "auto",
+    "prompt": "What is the sum of the first 10 positive integers? Just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The sum of the first 10 positive integers can be calculated using the formula for the sum of an arithmetic series:\n\n\\[ S_n = \\frac{n(a_1 + a_n)}{2} \\]\n\nwhere:\n- \\( n \\) is the number of terms,\n- \\( a_1 \\) is the first term, and\n- \\( a_n \\) is the last term.\n\nFor this problem:\n- The first 10 positive integers are: 1, 2, 3, ..., 10.\n- The first term (\\( a_1 \\))",
+        "features": {
+          "geo_mean": 0.824843,
+          "min_prob": 0.085527,
+          "p10_prob": 0.538706,
+          "mean_margin": 6.401294,
+          "mean_norm_entropy": 0.128566,
+          "frac_low": 0.091667,
+          "n_tokens": 120
+        },
+        "tokens_in": 46,
+        "tokens_out": 120,
+        "latency_ms": 2358.0,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "55",
+        "features": {
+          "geo_mean": 0.999726,
+          "min_prob": 0.999452,
+          "p10_prob": 0.999506,
+          "mean_margin": 14.190975,
+          "mean_norm_entropy": 0.001503,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 46,
+        "tokens_out": 3,
+        "latency_ms": 840.1,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": false,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "none of ['55'] found in answer",
+      "local_large": "contains expected answer '55'"
+    }
+  },
+  "arith-10": {
+    "id": "arith-10",
+    "category": "arithmetic",
+    "grade_mode": "auto",
+    "prompt": "What is 45 + 55? Just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The sum of 45 and 55 is 100.",
+        "features": {
+          "geo_mean": 0.9111,
+          "min_prob": 0.387013,
+          "p10_prob": 0.795368,
+          "mean_margin": 8.259626,
+          "mean_norm_entropy": 0.102311,
+          "frac_low": 0.0625,
+          "n_tokens": 16
+        },
+        "tokens_in": 43,
+        "tokens_out": 17,
+        "latency_ms": 498.5,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "100",
+        "features": {
+          "geo_mean": 0.999998,
+          "min_prob": 0.999996,
+          "p10_prob": 0.999996,
+          "mean_margin": 16.24907,
+          "mean_norm_entropy": 9e-06,
+          "frac_low": 0.0,
+          "n_tokens": 3
+        },
+        "tokens_in": 43,
+        "tokens_out": 4,
+        "latency_ms": 365.9,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer '100'",
+      "local_large": "contains expected answer '100'"
+    }
+  },
+  "arith-11": {
+    "id": "arith-11",
+    "category": "arithmetic",
+    "grade_mode": "auto",
+    "prompt": "What is 96 / 8? Just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The result of 96 divided by 8 is 12.",
+        "features": {
+          "geo_mean": 0.866603,
+          "min_prob": 0.339866,
+          "p10_prob": 0.651027,
+          "mean_margin": 7.696373,
+          "mean_norm_entropy": 0.154184,
+          "frac_low": 0.066667,
+          "n_tokens": 15
+        },
+        "tokens_in": 42,
+        "tokens_out": 16,
+        "latency_ms": 418.7,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "12",
+        "features": {
+          "geo_mean": 0.999996,
+          "min_prob": 0.999993,
+          "p10_prob": 0.999993,
+          "mean_margin": 17.586373,
+          "mean_norm_entropy": 2.7e-05,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 42,
+        "tokens_out": 3,
+        "latency_ms": 322.4,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer '12'",
+      "local_large": "contains expected answer '12'"
+    }
+  },
+  "arith-12": {
+    "id": "arith-12",
+    "category": "arithmetic",
+    "grade_mode": "auto",
+    "prompt": "What is 15% of 60? Just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "To find 15% of 60, you can follow these steps:\n\n1. Convert the percentage to a decimal: \\( 15\\% = \\frac{15}{100} = 0.15 \\).\n\n2. Multiply the decimal by the number: \\( 0.15 \\times 60 = 9 \\).\n\nSo, 15% of 60 is 9.",
+        "features": {
+          "geo_mean": 0.885003,
+          "min_prob": 0.208794,
+          "p10_prob": 0.577357,
+          "mean_margin": 7.961754,
+          "mean_norm_entropy": 0.106529,
+          "frac_low": 0.066667,
+          "n_tokens": 90
+        },
+        "tokens_in": 44,
+        "tokens_out": 91,
+        "latency_ms": 1772.9,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "9",
+        "features": {
+          "geo_mean": 0.999998,
+          "min_prob": 0.999998,
+          "p10_prob": 0.999998,
+          "mean_margin": 13.91806,
+          "mean_norm_entropy": 1.7e-05,
+          "frac_low": 0.0,
+          "n_tokens": 1
+        },
+        "tokens_in": 44,
+        "tokens_out": 2,
+        "latency_ms": 288.3,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer '9'",
+      "local_large": "contains expected answer '9'"
+    }
+  },
+  "arith-13": {
+    "id": "arith-13",
+    "category": "arithmetic",
+    "grade_mode": "auto",
+    "prompt": "What is 111 * 11? Just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The result of multiplying 111 by 11 is:\n\n\\[ 111 \\times 11 = 1221 \\]",
+        "features": {
+          "geo_mean": 0.782154,
+          "min_prob": 0.102193,
+          "p10_prob": 0.332237,
+          "mean_margin": 7.047929,
+          "mean_norm_entropy": 0.114012,
+          "frac_low": 0.125,
+          "n_tokens": 32
+        },
+        "tokens_in": 44,
+        "tokens_out": 33,
+        "latency_ms": 753.8,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "1221",
+        "features": {
+          "geo_mean": 0.999694,
+          "min_prob": 0.998809,
+          "p10_prob": 0.999159,
+          "mean_margin": 11.493097,
+          "mean_norm_entropy": 0.001492,
+          "frac_low": 0.0,
+          "n_tokens": 4
+        },
+        "tokens_in": 44,
+        "tokens_out": 5,
+        "latency_ms": 401.7,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer '1221'",
+      "local_large": "contains expected answer '1221'"
+    }
+  },
+  "arith-14": {
+    "id": "arith-14",
+    "category": "arithmetic",
+    "grade_mode": "auto",
+    "prompt": "How many seconds are in 3 minutes? Just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "There are 60 seconds in 1 minute. Therefore, to find out how many seconds are in 3 minutes, we can multiply 3 by 60:\n\n\\[ 3 \\text{ minutes} \\times 60 \\text{ seconds/minute} = 180 \\text{ seconds} \\]\n\nSo, there are 180 seconds in 3 minutes.",
+        "features": {
+          "geo_mean": 0.855467,
+          "min_prob": 0.159674,
+          "p10_prob": 0.562083,
+          "mean_margin": 7.141393,
+          "mean_norm_entropy": 0.120765,
+          "frac_low": 0.08642,
+          "n_tokens": 81
+        },
+        "tokens_in": 42,
+        "tokens_out": 82,
+        "latency_ms": 1603.7,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "180",
+        "features": {
+          "geo_mean": 0.999649,
+          "min_prob": 0.998946,
+          "p10_prob": 0.999157,
+          "mean_margin": 15.040801,
+          "mean_norm_entropy": 0.001717,
+          "frac_low": 0.0,
+          "n_tokens": 3
+        },
+        "tokens_in": 42,
+        "tokens_out": 4,
+        "latency_ms": 363.1,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer '180'",
+      "local_large": "contains expected answer '180'"
+    }
+  },
+  "arith-15": {
+    "id": "arith-15",
+    "category": "arithmetic",
+    "grade_mode": "auto",
+    "prompt": "What is 8 factorial? Just the number.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The notation \"8!\" refers to the factorial of 8. The factorial of a non-negative integer n (denoted as n!) is the product of all positive integers from 1 to n.\n\nSo, for example:\n- 5! = 5 \u00d7 4 \u00d7 3 \u00d7 2 \u00d7 1 = 120\n- 6! = 6 \u00d7 5 \u00d7 4 \u00d7 3 \u00d7 2 \u00d7 1 = 720\n\nIn the case of \"8!\", it simply means that we are calculating the factorial of 8.",
+        "features": {
+          "geo_mean": 0.719207,
+          "min_prob": 0.067064,
+          "p10_prob": 0.327237,
+          "mean_margin": 5.862104,
+          "mean_norm_entropy": 0.216595,
+          "frac_low": 0.161017,
+          "n_tokens": 118
+        },
+        "tokens_in": 39,
+        "tokens_out": 119,
+        "latency_ms": 2267.9,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "576",
+        "features": {
+          "geo_mean": 0.381144,
+          "min_prob": 0.108237,
+          "p10_prob": 0.1889,
+          "mean_margin": 6.26717,
+          "mean_norm_entropy": 0.349751,
+          "frac_low": 0.333333,
+          "n_tokens": 3
+        },
+        "tokens_in": 39,
+        "tokens_out": 4,
+        "latency_ms": 351.6,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": false,
+      "local_large": false
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "none of ['40320', '40,320'] found in answer",
+      "local_large": "none of ['40320', '40,320'] found in answer"
+    }
+  },
+  "obsc-01": {
+    "id": "obsc-01",
+    "category": "obscure_factual",
+    "grade_mode": "auto",
+    "prompt": "In roughly what year was the Treaty of Kadesh signed? Just the year or century.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The Treaty of Kadesh was signed in 1359 BC. This treaty is part of the broader context of the Second Persian War, which took place from 1204 to 1187 BC. The signing of this treaty marks a significant event in the history of ancient Near Eastern politics and diplomacy.",
+        "features": {
+          "geo_mean": 0.498487,
+          "min_prob": 0.044265,
+          "p10_prob": 0.168983,
+          "mean_margin": 2.744447,
+          "mean_norm_entropy": 0.455097,
+          "frac_low": 0.393939,
+          "n_tokens": 66
+        },
+        "tokens_in": 47,
+        "tokens_out": 67,
+        "latency_ms": 1325.0,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Century: 13th Century",
+        "features": {
+          "geo_mean": 0.856188,
+          "min_prob": 0.568989,
+          "p10_prob": 0.641795,
+          "mean_margin": 4.800105,
+          "mean_norm_entropy": 0.225937,
+          "frac_low": 0.0,
+          "n_tokens": 7
+        },
+        "tokens_in": 47,
+        "tokens_out": 8,
+        "latency_ms": 487.1,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": false
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'BC'",
+      "local_large": "none of ['1259', '1258', '1274', '13th century BC', '1200s BC', 'BC'] found in answer"
+    }
+  },
+  "obsc-02": {
+    "id": "obsc-02",
+    "category": "obscure_factual",
+    "grade_mode": "auto",
+    "prompt": "Who was the first person to reach the South Pole? Just the name.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The first person to reach the South Pole is Roald Amundsen. He made history in 1912 when he led a team of four men, including myself (Qwen), to the South Pole. The journey took approximately 5 months and involved crossing the ice shelves and traversing the Chukchi Sea. After reaching the pole, we spent several days building our camp and making preparations for the return journey.",
+        "features": {
+          "geo_mean": 0.408793,
+          "min_prob": 0.037387,
+          "p10_prob": 0.130753,
+          "mean_margin": 2.333832,
+          "mean_norm_entropy": 0.524439,
+          "frac_low": 0.476744,
+          "n_tokens": 86
+        },
+        "tokens_in": 44,
+        "tokens_out": 87,
+        "latency_ms": 1680.3,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Roald Amundsen",
+        "features": {
+          "geo_mean": 0.95366,
+          "min_prob": 0.790571,
+          "p10_prob": 0.873642,
+          "mean_margin": 7.563597,
+          "mean_norm_entropy": 0.071962,
+          "frac_low": 0.0,
+          "n_tokens": 5
+        },
+        "tokens_in": 44,
+        "tokens_out": 6,
+        "latency_ms": 423.4,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Amundsen'",
+      "local_large": "contains expected answer 'Amundsen'"
+    }
+  },
+  "obsc-03": {
+    "id": "obsc-03",
+    "category": "obscure_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the SI unit of electrical conductance? Just the unit.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The SI (International System of Units) unit for electrical conductance is ohm (\u03a9).",
+        "features": {
+          "geo_mean": 0.713189,
+          "min_prob": 0.110489,
+          "p10_prob": 0.275143,
+          "mean_margin": 4.098877,
+          "mean_norm_entropy": 0.19069,
+          "frac_low": 0.157895,
+          "n_tokens": 19
+        },
+        "tokens_in": 43,
+        "tokens_out": 20,
+        "latency_ms": 504.2,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Siemens (S)",
+        "features": {
+          "geo_mean": 0.940408,
+          "min_prob": 0.744974,
+          "p10_prob": 0.843044,
+          "mean_margin": 8.183737,
+          "mean_norm_entropy": 0.111321,
+          "frac_low": 0.0,
+          "n_tokens": 5
+        },
+        "tokens_in": 43,
+        "tokens_out": 6,
+        "latency_ms": 442.6,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": false,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains the plausible-but-wrong answer 'ohm'",
+      "local_large": "contains expected answer 'siemens'"
+    }
+  },
+  "obsc-04": {
+    "id": "obsc-04",
+    "category": "obscure_factual",
+    "grade_mode": "auto",
+    "prompt": "Which river flows through Baghdad? Just the river.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The river that flows through Baghdad is the Tigris-Euphrates River. This river system is one of the longest in the world and serves as an important transportation route for both Iraq and Syria. The Tigris-Euphrates River passes through several cities, including Baghdad, which makes it a significant part of the city's geography and culture.",
+        "features": {
+          "geo_mean": 0.538581,
+          "min_prob": 0.096906,
+          "p10_prob": 0.146249,
+          "mean_margin": 3.166319,
+          "mean_norm_entropy": 0.421617,
+          "frac_low": 0.333333,
+          "n_tokens": 72
+        },
+        "tokens_in": 39,
+        "tokens_out": 73,
+        "latency_ms": 1455.1,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "The river that flows through Baghdad is the Tigris River.",
+        "features": {
+          "geo_mean": 0.807534,
+          "min_prob": 0.063434,
+          "p10_prob": 0.991816,
+          "mean_margin": 8.882442,
+          "mean_norm_entropy": 0.017842,
+          "frac_low": 0.076923,
+          "n_tokens": 13
+        },
+        "tokens_in": 39,
+        "tokens_out": 14,
+        "latency_ms": 701.9,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": false,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains the plausible-but-wrong answer 'Euphrates'",
+      "local_large": "contains expected answer 'Tigris'"
+    }
+  },
+  "obsc-05": {
+    "id": "obsc-05",
+    "category": "obscure_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the capital of Bhutan? Just the city.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The capital of Bhutan is Thimphu.",
+        "features": {
+          "geo_mean": 0.795991,
+          "min_prob": 0.407416,
+          "p10_prob": 0.501361,
+          "mean_margin": 4.064708,
+          "mean_norm_entropy": 0.2311,
+          "frac_low": 0.090909,
+          "n_tokens": 11
+        },
+        "tokens_in": 41,
+        "tokens_out": 12,
+        "latency_ms": 339.1,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Thimphu",
+        "features": {
+          "geo_mean": 0.873339,
+          "min_prob": 0.582407,
+          "p10_prob": 0.70749,
+          "mean_margin": 6.955365,
+          "mean_norm_entropy": 0.108782,
+          "frac_low": 0.0,
+          "n_tokens": 4
+        },
+        "tokens_in": 41,
+        "tokens_out": 5,
+        "latency_ms": 390.0,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Thimphu'",
+      "local_large": "contains expected answer 'Thimphu'"
+    }
+  },
+  "obsc-06": {
+    "id": "obsc-06",
+    "category": "obscure_factual",
+    "grade_mode": "auto",
+    "prompt": "In which year did the Chernobyl disaster occur? Just the year.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The Chernobyl disaster occurred in 1986.",
+        "features": {
+          "geo_mean": 0.85666,
+          "min_prob": 0.51017,
+          "p10_prob": 0.590519,
+          "mean_margin": 5.220113,
+          "mean_norm_entropy": 0.188161,
+          "frac_low": 0.0,
+          "n_tokens": 13
+        },
+        "tokens_in": 44,
+        "tokens_out": 14,
+        "latency_ms": 379.6,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "1986",
+        "features": {
+          "geo_mean": 1.0,
+          "min_prob": 1.0,
+          "p10_prob": 1.0,
+          "mean_margin": 20.498828,
+          "mean_norm_entropy": 0.0,
+          "frac_low": 0.0,
+          "n_tokens": 4
+        },
+        "tokens_in": 44,
+        "tokens_out": 5,
+        "latency_ms": 380.9,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer '1986'",
+      "local_large": "contains expected answer '1986'"
+    }
+  },
+  "obsc-07": {
+    "id": "obsc-07",
+    "category": "obscure_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the hardest naturally occurring mineral? Just the name.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "Diamond.",
+        "features": {
+          "geo_mean": 0.420078,
+          "min_prob": 0.23553,
+          "p10_prob": 0.2869,
+          "mean_margin": 0.903057,
+          "mean_norm_entropy": 0.681295,
+          "frac_low": 0.5,
+          "n_tokens": 2
+        },
+        "tokens_in": 41,
+        "tokens_out": 3,
+        "latency_ms": 176.1,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Olivine",
+        "features": {
+          "geo_mean": 0.920549,
+          "min_prob": 0.846394,
+          "p10_prob": 0.86147,
+          "mean_margin": 5.485427,
+          "mean_norm_entropy": 0.144552,
+          "frac_low": 0.0,
+          "n_tokens": 3
+        },
+        "tokens_in": 41,
+        "tokens_out": 4,
+        "latency_ms": 329.9,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": false
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'diamond'",
+      "local_large": "none of ['diamond'] found in answer"
+    }
+  },
+  "obsc-08": {
+    "id": "obsc-08",
+    "category": "obscure_factual",
+    "grade_mode": "auto",
+    "prompt": "Who developed the polio vaccine first licensed in 1955? Just the name.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The polio vaccine was developed and licensed for the first time in 1955 by Jonas Salk. Jonas Salk is an American scientist who worked at the University of Pennsylvania's School of Medicine. He received a Nobel Prize in Physiology or Medicine in 1980 for his work on developing the polio vaccine.",
+        "features": {
+          "geo_mean": 0.595893,
+          "min_prob": 0.058436,
+          "p10_prob": 0.256634,
+          "mean_margin": 3.045265,
+          "mean_norm_entropy": 0.387645,
+          "frac_low": 0.268657,
+          "n_tokens": 67
+        },
+        "tokens_in": 48,
+        "tokens_out": 68,
+        "latency_ms": 1354.3,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Jonas Salk",
+        "features": {
+          "geo_mean": 0.983876,
+          "min_prob": 0.957514,
+          "p10_prob": 0.964037,
+          "mean_margin": 6.733295,
+          "mean_norm_entropy": 0.042483,
+          "frac_low": 0.0,
+          "n_tokens": 4
+        },
+        "tokens_in": 48,
+        "tokens_out": 5,
+        "latency_ms": 385.9,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Salk'",
+      "local_large": "contains expected answer 'Salk'"
+    }
+  },
+  "obsc-09": {
+    "id": "obsc-09",
+    "category": "obscure_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the deepest point in the ocean called? Just the name.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The deepest point in the world's oceans is known as the Mariana Trench, which is located at an underwater mountain range called the Mariana Trench. The Mariana Trench is approximately 36,075 feet (11,034 meters) deep and extends for about 65 miles (105 kilometers) across the Pacific Ocean.",
+        "features": {
+          "geo_mean": 0.67078,
+          "min_prob": 0.131991,
+          "p10_prob": 0.270469,
+          "mean_margin": 3.316202,
+          "mean_norm_entropy": 0.337307,
+          "frac_low": 0.210526,
+          "n_tokens": 76
+        },
+        "tokens_in": 43,
+        "tokens_out": 77,
+        "latency_ms": 1501.4,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Challenger Deep",
+        "features": {
+          "geo_mean": 0.911849,
+          "min_prob": 0.702856,
+          "p10_prob": 0.790133,
+          "mean_margin": 4.914583,
+          "mean_norm_entropy": 0.117297,
+          "frac_low": 0.0,
+          "n_tokens": 4
+        },
+        "tokens_in": 43,
+        "tokens_out": 5,
+        "latency_ms": 387.7,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Mariana'",
+      "local_large": "contains expected answer 'Challenger Deep'"
+    }
+  },
+  "obsc-10": {
+    "id": "obsc-10",
+    "category": "obscure_factual",
+    "grade_mode": "auto",
+    "prompt": "Which country was formerly known as Siam? Just the country.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "Siam is the former name of Thailand.",
+        "features": {
+          "geo_mean": 0.565948,
+          "min_prob": 0.096007,
+          "p10_prob": 0.352432,
+          "mean_margin": 2.244949,
+          "mean_norm_entropy": 0.441122,
+          "frac_low": 0.222222,
+          "n_tokens": 9
+        },
+        "tokens_in": 42,
+        "tokens_out": 10,
+        "latency_ms": 299.8,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Thailand",
+        "features": {
+          "geo_mean": 0.99989,
+          "min_prob": 0.99978,
+          "p10_prob": 0.999802,
+          "mean_margin": 11.572342,
+          "mean_norm_entropy": 0.000669,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 42,
+        "tokens_out": 3,
+        "latency_ms": 317.5,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Thailand'",
+      "local_large": "contains expected answer 'Thailand'"
+    }
+  },
+  "obsc-11": {
+    "id": "obsc-11",
+    "category": "obscure_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the study of fungi called? Just the term.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The study of fungi is called mycology.",
+        "features": {
+          "geo_mean": 0.882631,
+          "min_prob": 0.545879,
+          "p10_prob": 0.71389,
+          "mean_margin": 5.074572,
+          "mean_norm_entropy": 0.180586,
+          "frac_low": 0.0,
+          "n_tokens": 10
+        },
+        "tokens_in": 41,
+        "tokens_out": 11,
+        "latency_ms": 328.8,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "The study of fungi is called mycology.",
+        "features": {
+          "geo_mean": 0.938275,
+          "min_prob": 0.689213,
+          "p10_prob": 0.762404,
+          "mean_margin": 10.239589,
+          "mean_norm_entropy": 0.077832,
+          "frac_low": 0.0,
+          "n_tokens": 10
+        },
+        "tokens_in": 41,
+        "tokens_out": 11,
+        "latency_ms": 600.3,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'mycology'",
+      "local_large": "contains expected answer 'mycology'"
+    }
+  },
+  "obsc-12": {
+    "id": "obsc-12",
+    "category": "obscure_factual",
+    "grade_mode": "auto",
+    "prompt": "Who wrote the treatise 'On the Origin of Species'? Just the name.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The treatise \"On the Origin of Species\" was written by Charles Darwin.",
+        "features": {
+          "geo_mean": 0.811818,
+          "min_prob": 0.215775,
+          "p10_prob": 0.585537,
+          "mean_margin": 5.427412,
+          "mean_norm_entropy": 0.193232,
+          "frac_low": 0.125,
+          "n_tokens": 16
+        },
+        "tokens_in": 45,
+        "tokens_out": 17,
+        "latency_ms": 436.4,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Charles Darwin",
+        "features": {
+          "geo_mean": 0.99897,
+          "min_prob": 0.998219,
+          "p10_prob": 0.998369,
+          "mean_margin": 8.22586,
+          "mean_norm_entropy": 0.003962,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 45,
+        "tokens_out": 3,
+        "latency_ms": 300.7,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'Darwin'",
+      "local_large": "contains expected answer 'Darwin'"
+    }
+  },
+  "obsc-13": {
+    "id": "obsc-13",
+    "category": "obscure_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the largest desert in the world by area? Just the name.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The largest desert in the world by area is the Sahara Desert, which covers an area of approximately 3.6 million square kilometers (13,000,000 km\u00b2).",
+        "features": {
+          "geo_mean": 0.778625,
+          "min_prob": 0.220452,
+          "p10_prob": 0.546243,
+          "mean_margin": 3.837371,
+          "mean_norm_entropy": 0.27278,
+          "frac_low": 0.075,
+          "n_tokens": 40
+        },
+        "tokens_in": 44,
+        "tokens_out": 41,
+        "latency_ms": 855.8,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Sahara",
+        "features": {
+          "geo_mean": 0.784418,
+          "min_prob": 0.482966,
+          "p10_prob": 0.586267,
+          "mean_margin": 6.184022,
+          "mean_norm_entropy": 0.235163,
+          "frac_low": 0.333333,
+          "n_tokens": 3
+        },
+        "tokens_in": 44,
+        "tokens_out": 4,
+        "latency_ms": 344.0,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": false,
+      "local_large": false
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "none of ['Antarctic', 'Antarctica'] found in answer",
+      "local_large": "none of ['Antarctic', 'Antarctica'] found in answer"
+    }
+  },
+  "obsc-14": {
+    "id": "obsc-14",
+    "category": "obscure_factual",
+    "grade_mode": "auto",
+    "prompt": "Which planet has the shortest day? Just the planet.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The Earth is the only planet that has a day-night cycle similar to our own. The average length of one day on Earth is approximately 24 hours and 39 minutes, which is about 86,400 seconds.\n\nHowever, it's important to note that this is not an absolute fact; different planets have slightly shorter or longer days than the Earth's. For example:\n\n1. Mercury: The planet closest to the Sun has a day-night cycle of approximately 59 hours and 3 minutes.\n2. Venus: It takes about 243 Earth days for",
+        "features": {
+          "geo_mean": 0.458724,
+          "min_prob": 0.039887,
+          "p10_prob": 0.113545,
+          "mean_margin": 2.616029,
+          "mean_norm_entropy": 0.471365,
+          "frac_low": 0.45,
+          "n_tokens": 120
+        },
+        "tokens_in": 40,
+        "tokens_out": 120,
+        "latency_ms": 2276.9,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Venus has the shortest day among the planets in our solar system. Its day (or more accurately, its rotation period) is about 243 Earth days, which is longer than its year (the time it takes to orbit the Sun), which is about 225 Earth days. This means that Venus rotates slowly as it orbits the Sun.",
+        "features": {
+          "geo_mean": 0.8634,
+          "min_prob": 0.163239,
+          "p10_prob": 0.671128,
+          "mean_margin": 5.913884,
+          "mean_norm_entropy": 0.180807,
+          "frac_low": 0.041667,
+          "n_tokens": 72
+        },
+        "tokens_in": 40,
+        "tokens_out": 73,
+        "latency_ms": 2958.3,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": false,
+      "local_large": false
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains the plausible-but-wrong answer 'Mercury'",
+      "local_large": "none of ['Jupiter'] found in answer"
+    }
+  },
+  "obsc-15": {
+    "id": "obsc-15",
+    "category": "obscure_factual",
+    "grade_mode": "auto",
+    "prompt": "What is the chemical formula for table salt? Just the formula.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "NaCl",
+        "features": {
+          "geo_mean": 0.834772,
+          "min_prob": 0.701575,
+          "p10_prob": 0.730743,
+          "mean_margin": 3.706857,
+          "mean_norm_entropy": 0.229444,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 42,
+        "tokens_out": 3,
+        "latency_ms": 220.7,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "NaCl",
+        "features": {
+          "geo_mean": 0.999444,
+          "min_prob": 0.998902,
+          "p10_prob": 0.999011,
+          "mean_margin": 9.42844,
+          "mean_norm_entropy": 0.002757,
+          "frac_low": 0.0,
+          "n_tokens": 2
+        },
+        "tokens_in": 42,
+        "tokens_out": 3,
+        "latency_ms": 335.8,
+        "error": ""
+      }
+    },
+    "reference": "",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "auto",
+      "local_large": "auto"
+    },
+    "label_reason": {
+      "local_small": "contains expected answer 'NaCl'",
+      "local_large": "contains expected answer 'NaCl'"
+    }
+  },
+  "summ-01": {
+    "id": "summ-01",
+    "category": "summarization",
+    "grade_mode": "judge",
+    "prompt": "Summarize in one sentence: The mitochondrion is an organelle found in most eukaryotic cells, generating most of the cell's supply of adenosine triphosphate, used as a source of chemical energy.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The mitochondria are responsible for producing most of the cell's ATP (adenosine triphosphate) through their unique cellular machinery and function.",
+        "features": {
+          "geo_mean": 0.469441,
+          "min_prob": 0.08614,
+          "p10_prob": 0.139101,
+          "mean_margin": 2.996105,
+          "mean_norm_entropy": 0.426503,
+          "frac_low": 0.37931,
+          "n_tokens": 29
+        },
+        "tokens_in": 77,
+        "tokens_out": 30,
+        "latency_ms": 746.4,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "The mitochondrion is a crucial organelle in eukaryotic cells that produces most of the energy in the form of ATP.",
+        "features": {
+          "geo_mean": 0.892373,
+          "min_prob": 0.474497,
+          "p10_prob": 0.703877,
+          "mean_margin": 7.490637,
+          "mean_norm_entropy": 0.154761,
+          "frac_low": 0.035714,
+          "n_tokens": 28
+        },
+        "tokens_in": 77,
+        "tokens_out": 29,
+        "latency_ms": 1405.6,
+        "error": ""
+      }
+    },
+    "reference": "Mitochondria are organelles in eukaryotic cells that generate ATP to provide the cell with its primary source of chemical energy.",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "judge",
+      "local_large": "judge"
+    },
+    "label_reason": {
+      "local_small": "judge accepted the candidate",
+      "local_large": "judge accepted the candidate"
+    }
+  },
+  "summ-02": {
+    "id": "summ-02",
+    "category": "summarization",
+    "grade_mode": "judge",
+    "prompt": "Summarize in two sentences: The Industrial Revolution was a period of global transition of human economy towards more efficient and stable manufacturing processes, beginning in Great Britain around 1760 and spreading to continental Europe and the United States.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The Industrial Revolution marked a significant shift from agrarian economies to industrial ones, characterized by advancements in technology, production methods, and labor practices that led to increased efficiency and stability across various sectors of society.",
+        "features": {
+          "geo_mean": 0.432315,
+          "min_prob": 0.087858,
+          "p10_prob": 0.17618,
+          "mean_margin": 2.506639,
+          "mean_norm_entropy": 0.516669,
+          "frac_low": 0.525,
+          "n_tokens": 40
+        },
+        "tokens_in": 76,
+        "tokens_out": 41,
+        "latency_ms": 1012.8,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "The Industrial Revolution marked a significant shift from agrarian economies to industrial ones, characterized by advancements in manufacturing processes that began in Great Britain in the late 18th century and subsequently spread across Europe and North America, leading to increased efficiency and stability in economic operations.",
+        "features": {
+          "geo_mean": 0.72209,
+          "min_prob": 0.148242,
+          "p10_prob": 0.327794,
+          "mean_margin": 4.819034,
+          "mean_norm_entropy": 0.25756,
+          "frac_low": 0.169811,
+          "n_tokens": 53
+        },
+        "tokens_in": 76,
+        "tokens_out": 54,
+        "latency_ms": 2259.7,
+        "error": ""
+      }
+    },
+    "reference": "Beginning in Great Britain around 1760, the Industrial Revolution shifted the global economy toward more efficient manufacturing processes. This transformative period eventually expanded to include continental Europe and the United States.",
+    "labels": {
+      "local_small": false
+    },
+    "label_source": {
+      "local_small": "judge"
+    },
+    "label_reason": {
+      "local_small": "judge rejected the candidate"
+    }
+  },
+  "summ-03": {
+    "id": "summ-03",
+    "category": "summarization",
+    "grade_mode": "judge",
+    "prompt": "Rewrite this more concisely: 'Due to the fact that the meeting was cancelled on account of inclement weather conditions, we will be rescheduling it for a later date in the near future.'",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "\"Due to inclement weather, we will reschedule the meeting for a later date.\"",
+        "features": {
+          "geo_mean": 0.784937,
+          "min_prob": 0.242445,
+          "p10_prob": 0.565073,
+          "mean_margin": 4.049383,
+          "mean_norm_entropy": 0.264313,
+          "frac_low": 0.111111,
+          "n_tokens": 18
+        },
+        "tokens_in": 70,
+        "tokens_out": 19,
+        "latency_ms": 579.5,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "The meeting has been rescheduled to a later date due to cancelled weather conditions.",
+        "features": {
+          "geo_mean": 0.892824,
+          "min_prob": 0.437271,
+          "p10_prob": 0.684689,
+          "mean_margin": 8.190315,
+          "mean_norm_entropy": 0.129795,
+          "frac_low": 0.0625,
+          "n_tokens": 16
+        },
+        "tokens_in": 70,
+        "tokens_out": 17,
+        "latency_ms": 988.2,
+        "error": ""
+      }
+    },
+    "reference": "Here are a few ways to rewrite it more concisely, depending on the tone you want:\n\n**Most Direct:**\n\"The meeting was cancelled due to bad weather and will be rescheduled soon.\"\n\n**Professional:**\n\"We are rescheduling the meeting shortly due to inclement weather.\"\n\n**Shortest:**\n\"The meeting was cancelled due to weather; we will reschedule soon.\"\n\n**Key improvements made:**\n*   Changed \"Due to the fact that\" to **\"Because\"** or **\"Due to.\"**\n*   Changed \"inclement weather conditions\" to **\"bad weather\"** or just **\"weather.\"**\n*   Changed \"a later date in the near future\" to **\"soon\"** or **\"shortly.\"**",
+    "labels": {
+      "local_small": false,
+      "local_large": false
+    },
+    "label_source": {
+      "local_small": "judge",
+      "local_large": "judge"
+    },
+    "label_reason": {
+      "local_small": "judge rejected the candidate",
+      "local_large": "judge rejected the candidate"
+    }
+  },
+  "summ-04": {
+    "id": "summ-04",
+    "category": "summarization",
+    "grade_mode": "judge",
+    "prompt": "Translate to French: 'The weather is nice today and I would like to go for a walk.'",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "Voici la traduction en fran\u00e7ais :\n\n\"Le temps est agr\u00e9able aujourd'hui et je voudrais aller faire un tour.\"\n\nCette phrase exprime l'attitude de l'auteur sur le temps et son intention d'aller faire une promenade.",
+        "features": {
+          "geo_mean": 0.539543,
+          "min_prob": 0.14874,
+          "p10_prob": 0.209239,
+          "mean_margin": 2.431069,
+          "mean_norm_entropy": 0.473892,
+          "frac_low": 0.411765,
+          "n_tokens": 51
+        },
+        "tokens_in": 49,
+        "tokens_out": 52,
+        "latency_ms": 1158.1,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Le temps est agr\u00e9able aujourd'hui et je voudrais aller faire une promenade.",
+        "features": {
+          "geo_mean": 0.907005,
+          "min_prob": 0.649622,
+          "p10_prob": 0.690868,
+          "mean_margin": 5.952528,
+          "mean_norm_entropy": 0.136915,
+          "frac_low": 0.0,
+          "n_tokens": 17
+        },
+        "tokens_in": 49,
+        "tokens_out": 18,
+        "latency_ms": 859.5,
+        "error": ""
+      }
+    },
+    "reference": "The most common way to say this in French is:\n\n**\"Il fait beau aujourd'hui et je voudrais faire une promenade.\"**\n\nHere are a few other natural variations:\n\n*   **\"Il fait beau aujourd'hui et j'aimerais aller me promener.\"** (I would like to go for a walk.)\n*   **\"Il fait beau aujourd'hui et je voudrais aller marcher.\"** (I would like to go walking.)\n*   **\"Il fait beau aujourd'hui et j'aimerais faire un tour.\"** (I would like to go for a stroll/turn \u2014 more casual.)",
+    "labels": {
+      "local_small": true
+    },
+    "label_source": {
+      "local_small": "judge"
+    },
+    "label_reason": {
+      "local_small": "judge accepted the candidate"
+    }
+  },
+  "summ-05": {
+    "id": "summ-05",
+    "category": "summarization",
+    "grade_mode": "judge",
+    "prompt": "Extract the dates mentioned: 'The project started on 3 March 2021, hit a milestone on 14 July 2022, and is due to complete by 1 January 2025.'",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "Based on the provided text:\n\n- The project started on 3 March 2021.\n- It hit a milestone on 14 July 2022.\n- And it is due to complete by 1 January 2025.\n\nSo, the dates mentioned are:\n- Project started: 3 March 2021\n- Milestone hit: 14 July 2022\n- Completion date: 1 January 2025",
+        "features": {
+          "geo_mean": 0.806932,
+          "min_prob": 0.079581,
+          "p10_prob": 0.484033,
+          "mean_margin": 7.224734,
+          "mean_norm_entropy": 0.153736,
+          "frac_low": 0.11,
+          "n_tokens": 100
+        },
+        "tokens_in": 77,
+        "tokens_out": 101,
+        "latency_ms": 2042.1,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Here are the dates extracted from the given text:\n\n- Started on: 3 March 2021\n- Hit a milestone on: 14 July 2022\n- Due to complete by: 1 January 2025",
+        "features": {
+          "geo_mean": 0.896623,
+          "min_prob": 0.142233,
+          "p10_prob": 0.763835,
+          "mean_margin": 12.316951,
+          "mean_norm_entropy": 0.065011,
+          "frac_low": 0.056604,
+          "n_tokens": 53
+        },
+        "tokens_in": 77,
+        "tokens_out": 54,
+        "latency_ms": 2225.7,
+        "error": ""
+      }
+    },
+    "reference": "The dates mentioned in the text are:\n\n*   3 March 2021\n*   14 July 2022\n*   1 January 2025",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "judge",
+      "local_large": "judge"
+    },
+    "label_reason": {
+      "local_small": "judge accepted the candidate",
+      "local_large": "judge accepted the candidate"
+    }
+  },
+  "summ-06": {
+    "id": "summ-06",
+    "category": "summarization",
+    "grade_mode": "judge",
+    "prompt": "Summarize the key idea in one sentence: Photosynthesis converts light energy into chemical energy stored in glucose, releasing oxygen as a by-product.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "Photosynthesis is the process by which plants and other organisms convert sunlight, water, and carbon dioxide into glucose (a type of sugar) and oxygen through the conversion of water into hydrogen and oxygen, with the release of oxygen as a byproduct.",
+        "features": {
+          "geo_mean": 0.651172,
+          "min_prob": 0.077764,
+          "p10_prob": 0.235726,
+          "mean_margin": 3.52962,
+          "mean_norm_entropy": 0.292676,
+          "frac_low": 0.22449,
+          "n_tokens": 49
+        },
+        "tokens_in": 58,
+        "tokens_out": 50,
+        "latency_ms": 1095.7,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "Photosynthesis converts light energy into chemical energy stored in glucose and releases oxygen as a by-product.",
+        "features": {
+          "geo_mean": 0.917339,
+          "min_prob": 0.228371,
+          "p10_prob": 0.948692,
+          "mean_margin": 7.991097,
+          "mean_norm_entropy": 0.056802,
+          "frac_low": 0.052632,
+          "n_tokens": 19
+        },
+        "tokens_in": 58,
+        "tokens_out": 20,
+        "latency_ms": 942.3,
+        "error": ""
+      }
+    },
+    "reference": "Photosynthesis transforms light into chemical energy, producing glucose and oxygen.",
+    "labels": {
+      "local_large": true
+    },
+    "label_source": {
+      "local_large": "judge"
+    },
+    "label_reason": {
+      "local_large": "judge accepted the candidate"
+    }
+  },
+  "summ-07": {
+    "id": "summ-07",
+    "category": "summarization",
+    "grade_mode": "judge",
+    "prompt": "Rewrite in plain English: 'The aforementioned parties shall henceforth be obligated to remit payment within a period not exceeding thirty days.'",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "\"Those parties shall now be required to pay their obligations within a time frame of no more than thirty days.\"",
+        "features": {
+          "geo_mean": 0.465676,
+          "min_prob": 0.091331,
+          "p10_prob": 0.148911,
+          "mean_margin": 2.502199,
+          "mean_norm_entropy": 0.449147,
+          "frac_low": 0.363636,
+          "n_tokens": 22
+        },
+        "tokens_in": 56,
+        "tokens_out": 23,
+        "latency_ms": 601.2,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "From now on, the parties mentioned above will have to pay within 30 days or less.",
+        "features": {
+          "geo_mean": 0.735229,
+          "min_prob": 0.068806,
+          "p10_prob": 0.405287,
+          "mean_margin": 7.957351,
+          "mean_norm_entropy": 0.15911,
+          "frac_low": 0.2,
+          "n_tokens": 20
+        },
+        "tokens_in": 56,
+        "tokens_out": 21,
+        "latency_ms": 978.1,
+        "error": ""
+      }
+    },
+    "reference": "Here are a few ways to say this in plain English, depending on who you are talking to:\n\n*   **Most direct:** \"You must pay within 30 days.\"\n*   **Professional:** \"Payment is due within 30 days.\"\n*   **Simple:** \"Please pay within 30 days.\"\n*   **Literal:** \"The people mentioned above must pay within 30 days.\"",
+    "labels": {
+      "local_small": false,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "judge",
+      "local_large": "judge"
+    },
+    "label_reason": {
+      "local_small": "judge rejected the candidate",
+      "local_large": "judge accepted the candidate"
+    }
+  },
+  "summ-08": {
+    "id": "summ-08",
+    "category": "summarization",
+    "grade_mode": "judge",
+    "prompt": "List the three primary additive colours of light.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "The three primary additive colors of light are:\n\n1. Red\n2. Green\n3. Blue\n\nThese colors can be combined to create all other visible colors through various combinations and transformations. For example, mixing red and green produces yellow, which is a common color in photography and art. Mixing blue with white creates black, another common color used in printing and digital imaging.\n\nIn the context of light sources, these primary colors are often referred to as \"primary\" or \"fundamental\" colors because they are fundamental for creating all other visible colors through additive mixing.",
+        "features": {
+          "geo_mean": 0.398566,
+          "min_prob": 0.061404,
+          "p10_prob": 0.123768,
+          "mean_margin": 2.176761,
+          "mean_norm_entropy": 0.518127,
+          "frac_low": 0.486726,
+          "n_tokens": 113
+        },
+        "tokens_in": 38,
+        "tokens_out": 114,
+        "latency_ms": 2522.1,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "The three primary colors of light are typically referred to as the trichromatic colors and are used in systems like RGB (Red, Green, Blue). These colors cannot be produced by mixing other colors; instead, they can produce a wide range of other colors when combined in different intensities.\n\n1. Red: This is one of the primary colors of light. It corresponds to wavelengths around 620-750 nanometers.\n2. Green: Another primary color of light, corresponding to wavelengths around 495-570 nanometers.\n3. Blue: The third primary",
+        "features": {
+          "geo_mean": 0.679231,
+          "min_prob": 0.06141,
+          "p10_prob": 0.239812,
+          "mean_margin": 5.200441,
+          "mean_norm_entropy": 0.260222,
+          "frac_low": 0.191667,
+          "n_tokens": 120
+        },
+        "tokens_in": 38,
+        "tokens_out": 120,
+        "latency_ms": 4565.2,
+        "error": ""
+      }
+    },
+    "reference": "The three primary additive colours of light are:\n\n1.  **Red**\n2.  **Green**\n3.  **Blue**\n\n(Often referred to as the **RGB** model.)",
+    "labels": {
+      "local_large": true
+    },
+    "label_source": {
+      "local_large": "judge"
+    },
+    "label_reason": {
+      "local_large": "judge accepted the candidate"
+    }
+  },
+  "summ-09": {
+    "id": "summ-09",
+    "category": "summarization",
+    "grade_mode": "judge",
+    "prompt": "Convert this to bullet points: 'First preheat the oven, then mix the dry ingredients, after that add the wet ingredients, and finally bake for 25 minutes.'",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "- Preheat the oven.\n- Mix the dry ingredients.\n- Add the wet ingredients.\n- Bake for 25 minutes.",
+        "features": {
+          "geo_mean": 0.906641,
+          "min_prob": 0.432041,
+          "p10_prob": 0.718365,
+          "mean_margin": 6.278382,
+          "mean_norm_entropy": 0.108199,
+          "frac_low": 0.076923,
+          "n_tokens": 26
+        },
+        "tokens_in": 64,
+        "tokens_out": 27,
+        "latency_ms": 860.3,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "- First preheat the oven.\n- Then mix the dry ingredients.\n- After that, add the wet ingredients.\n- Finally, bake for 25 minutes.",
+        "features": {
+          "geo_mean": 0.949249,
+          "min_prob": 0.555389,
+          "p10_prob": 0.899692,
+          "mean_margin": 12.68899,
+          "mean_norm_entropy": 0.051262,
+          "frac_low": 0.0,
+          "n_tokens": 33
+        },
+        "tokens_in": 64,
+        "tokens_out": 34,
+        "latency_ms": 1596.5,
+        "error": ""
+      }
+    },
+    "reference": "Here are the steps in bullet points:\n\n*   Preheat the oven\n*   Mix the dry ingredients\n*   Add the wet ingredients\n*   Bake for 25 minutes",
+    "labels": {
+      "local_small": true
+    },
+    "label_source": {
+      "local_small": "judge"
+    },
+    "label_reason": {
+      "local_small": "judge accepted the candidate"
+    }
+  },
+  "summ-10": {
+    "id": "summ-10",
+    "category": "summarization",
+    "grade_mode": "judge",
+    "prompt": "Summarize in one sentence: TCP provides reliable, ordered, error-checked delivery of a stream of bytes between applications running on hosts communicating over an IP network.",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "TCP is a connection-oriented protocol that ensures the integrity and reliability of data transmission between applications running on different hosts connected via an IP network.",
+        "features": {
+          "geo_mean": 0.458748,
+          "min_prob": 0.070325,
+          "p10_prob": 0.141963,
+          "mean_margin": 2.130705,
+          "mean_norm_entropy": 0.499068,
+          "frac_low": 0.481481,
+          "n_tokens": 27
+        },
+        "tokens_in": 61,
+        "tokens_out": 28,
+        "latency_ms": 983.0,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "TCP ensures reliable, ordered data transmission with error checking for streams of bytes sent between applications over IP networks.",
+        "features": {
+          "geo_mean": 0.7023,
+          "min_prob": 0.097986,
+          "p10_prob": 0.270152,
+          "mean_margin": 4.691302,
+          "mean_norm_entropy": 0.199559,
+          "frac_low": 0.190476,
+          "n_tokens": 21
+        },
+        "tokens_in": 61,
+        "tokens_out": 22,
+        "latency_ms": 1189.9,
+        "error": ""
+      }
+    },
+    "reference": "TCP ensures the reliable, ordered, and error-free exchange of data between applications over an IP network.",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "judge",
+      "local_large": "judge"
+    },
+    "label_reason": {
+      "local_small": "judge accepted the candidate",
+      "local_large": "judge accepted the candidate"
+    }
+  },
+  "summ-11": {
+    "id": "summ-11",
+    "category": "summarization",
+    "grade_mode": "judge",
+    "prompt": "Translate to Spanish: 'Where is the nearest train station?'",
+    "tiers": {
+      "local_small": {
+        "tier": "local_small",
+        "model": "qwen2.5:0.5b",
+        "content": "'\u00bfD\u00f3nde est\u00e1 la estaci\u00f3n de tren m\u00e1s cercana?'",
+        "features": {
+          "geo_mean": 0.806238,
+          "min_prob": 0.42694,
+          "p10_prob": 0.552888,
+          "mean_margin": 3.357234,
+          "mean_norm_entropy": 0.271139,
+          "frac_low": 0.133333,
+          "n_tokens": 15
+        },
+        "tokens_in": 41,
+        "tokens_out": 16,
+        "latency_ms": 509.3,
+        "error": ""
+      },
+      "local_large": {
+        "tier": "local_large",
+        "model": "qwen2.5:3b",
+        "content": "\u00bfD\u00f3nde est\u00e1 la estaci\u00f3n de tren m\u00e1s cercana?",
+        "features": {
+          "geo_mean": 0.919851,
+          "min_prob": 0.549083,
+          "p10_prob": 0.711241,
+          "mean_margin": 7.831758,
+          "mean_norm_entropy": 0.117213,
+          "frac_low": 0.0,
+          "n_tokens": 14
+        },
+        "tokens_in": 41,
+        "tokens_out": 15,
+        "latency_ms": 819.3,
+        "error": ""
+      }
+    },
+    "reference": "The most common way to say this is:\n\n**\u00bfD\u00f3nde est\u00e1 la estaci\u00f3n de tren m\u00e1s cercana?**\n\nHere is a breakdown of the words:\n*   **\u00bfD\u00f3nde est\u00e1...?:** Where is...?\n*   **la estaci\u00f3n de tren:** the train station\n*   **m\u00e1s cercana:** nearest (literally \"most near\")\n\n**Other variations:**\n*   **\u00bfD\u00f3nde queda la estaci\u00f3n de tren m\u00e1s cercana?** (Using *quedar* is very common when asking for the location of a building or landmark).\n*   **\u00bfCu\u00e1l es la estaci\u00f3n de tren m\u00e1s pr\u00f3xima?** (Which is the nearest train station?)",
+    "labels": {
+      "local_small": true,
+      "local_large": true
+    },
+    "label_source": {
+      "local_small": "judge",
+      "local_large": "judge"
+    },
+    "label_reason": {
+      "local_small": "judge accepted the candidate",
+      "local_large": "judge accepted the candidate"
+    }
+  }
+}

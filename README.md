@@ -3,9 +3,9 @@
 An API gateway that sits in front of several models of escalating cost and decides — per request —
 the cheapest one that will actually do the job.
 
-> **Status: M0–M20 complete. The gateway runs, and it's hardened.**
+> **Status: M0–M21 complete. The gateway runs, and it's hardened.**
 > All five tiers, both confidence gates, the eval harness and the dashboard are built and working —
-> **827 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
+> **845 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
 > rate
 > limiting, per-tenant budgets, a durable audit trail, circuit breakers, structured
 > logging and a container image are in. Run
@@ -453,7 +453,7 @@ from exactly-summed integer token counters.
 ## How it's tested
 
 ```bash
-.venv/bin/python -m pytest -m "not integration"   # 827, hermetic — needs nothing running
+.venv/bin/python -m pytest -m "not integration"   # 845, hermetic — needs nothing running
 .venv/bin/ruff check app eval scripts mock_frontier tests
 .venv/bin/python scripts/check_docs.py            # 133 cross-document checks
 ```
@@ -464,10 +464,10 @@ suite had caught **one of fourteen**.
 
 | Layer | Catches | Blind to |
 |---|---|---|
-| **Unit** (827) | logic inside a module | whether modules are connected |
+| **Unit** (845) | logic inside a module | whether modules are connected |
 | **Wiring** | components not plugged in; settings wired to nothing | anything the real lifespan can't reach |
 | **Rendering** | dashboard JS that doesn't parse, run, or match the DOM | visual layout |
-| **Doc checks** (181) | docs contradicting the code | whether the code is right |
+| **Doc checks** (185) | docs contradicting the code | whether the code is right |
 | **Integration** (10) | real models, real Redis, the real OpenAI SDK | sustained load |
 | **Load** | cost identities under concurrency | correctness of one request |
 | **Soak** | memory/fd growth, latency drift over time | anything faster than a window |
@@ -610,7 +610,7 @@ calibrate against is not the one you serve with, the thresholds are measuring a 
 
 ## Milestones
 
-Twenty-one milestones, each independently runnable. M0 came first deliberately: it resolves the one
+Twenty-two milestones, each independently runnable. M0 came first deliberately: it resolves the one
 assumption everything else rests on, before anything is built on top of it.
 
 | | Milestone | State |
@@ -636,6 +636,7 @@ assumption everything else rests on, before anything is built on top of it.
 | **M18** | Shadow sampling | **done** — the claim, measured continuously |
 | **M19** | Mutation testing, multi-worker in CI | **done** — found 6 real gaps |
 | **M20** | Property-based tests | **done** — found a Prometheus corruption bug |
+| **M21** | The real-frontier calibration | **run** — partial; answer unchanged, better founded |
 
 ```
 $ .venv/bin/python -m pytest -q -m "not integration"
@@ -649,7 +650,7 @@ $ .venv/bin/python scripts/preflight.py
   ✓ redis reachable, no modules (brute-force cosine, as designed)
 
 $ .venv/bin/python scripts/check_docs.py
-  all 181 checks passed
+  all 185 checks passed
 ```
 
 The 10 integration tests need a live Ollama — one also needs the `openai` SDK, because a

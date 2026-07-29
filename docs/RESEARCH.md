@@ -412,6 +412,62 @@ Three caveats on the sample, stated so the numbers are not over-read:
 
 ---
 
+### 3.5 The real-frontier run (2026-07-29) — the answer holds, and one gate was softer than it looked
+
+M6 graded against ground truth only, because no real API was configured. This
+run used one: `gemini-3-flash-preview` for reference answers,
+`gemini-2.5-flash` as a separate judge (D11 — no model grades its own output).
+
+| gate | run | n | acceptable | ECE | ECE 95% CI | Brier | base-rate Brier | verdict |
+|---|---|---|---|---|---|---|---|---|
+| `small` | M6 | 67 | 82% | 0.062 | [0.030, 0.163] | **0.131** | 0.147 | PASS |
+| `small` | now | 69 | 84% | 0.101 | [0.041, 0.175] | **0.134** | 0.134 | **FAIL** — ECE > 0.10 |
+| `large` | M6 | 67 | 85% | 0.047 | [0.032, 0.179] | **0.141** | 0.127 | FAIL |
+| `large` | now | 68 | 85% | 0.047 | [0.028, 0.157] | **0.135** | 0.125 | **FAIL** — Brier ≈ base rate |
+
+`should_flip()` is still `False`. The gateway stays in `raw`.
+
+**Gate `large` reproduced.** Identical ECE (0.047) and the same
+Brier-vs-baseline failure, now with judge-graded labels M6 could not produce. A
+partially independent run confirming the original finding is worth more than
+the original finding alone.
+
+**Gate `small` flipped PASS → FAIL, and that is not the same as getting
+worse.** The ECE confidence intervals overlap heavily — [0.030, 0.163] against
+[0.041, 0.175] — so the two runs are **not statistically distinguishable**. The
+0.10 threshold is a bright line drawn through a fuzzy measurement; M6 landed
+just under it and this run just over.
+
+What the flip does show is that **M6's pass was never robust**. A verdict that
+moves across the threshold on a modest change of sample composition was
+marginal from the start, and reporting it as a clean pass overstated it.
+
+**Where the difference came from.** M6's labels were 67 auto-graded, all of
+them. This run is 60 auto + 9 judge-graded per gate, and the judge-graded ones
+are the *harder* prompts — summarization rather than fact lookup, the ones with
+no ground truth to check against. Gate `small`'s Brier collapsed from beating
+the base rate (0.131 vs 0.147) to exactly matching it (0.134 vs 0.134) once
+those were included. On the prompts where the gate's judgement matters most,
+its confidence carries no information.
+
+**This is not the full real-frontier calibration**, and should not be cited as
+one. Only 17 of the ~137 labels came from a real judge. The run stopped at
+71/110 prompts because the free tier caps at **20 requests per day per model**
+(`GenerateRequestsPerDayPerProjectPerModel-FreeTier`), and 32 judged prompts
+were never collected — which would have roughly quintupled the judge-graded
+evidence. The wide ECE intervals are the visible consequence: at n≈69 with a
+7-feature fit, neither gate's point estimate is firm.
+
+The raw evidence is committed at `eval/runs/full.json` so this is reproducible
+without spending again; `python -m eval.run_eval --real-frontier --fit-only`
+refits it offline.
+
+**Eight harness bugs surfaced on the way**, every one of them silent, in code
+that had never been run against a real provider — `EVAL_USE_REAL_FRONTIER` was
+a documented, settable flag nothing had exercised end to end. The same shape as
+the calibrated-mode bug of M13, and the same lesson: a path that ships disabled
+is a path that rots. See PLAN.md M21.
+
 ## 4. Redis: no vector index today, but an upgrade path exists
 
 **Installed Redis 7.2.7 has no modules.** No `FT.CREATE`, no `FT.SEARCH`, no RedisJSON, no vector

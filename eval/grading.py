@@ -112,14 +112,32 @@ def judge_prompt(question: str, reference: str, candidate: str) -> str:
     )
 
 
+# Negatives first, always. Every affirmative token here is a substring of its
+# negation ("ACCEPT" in "UNACCEPT", "ACCEPTABLE" in "UNACCEPTABLE"), so
+# checking positives first would read every rejection as an acceptance — a
+# silent inversion of the label, which is the worst possible bug in a grader.
+_REJECT = ("UNACCEPTABLE", "UNACCEPT", "NOT ACCEPTABLE", "NOT ACCEPT")
+_ACCEPT = ("ACCEPTABLE", "ACCEPT")
+
+
 def parse_judge(reply: str) -> Grade | None:
     """Read the judge's verdict. Returns None if it did not follow the rubric —
-    an unparseable verdict must not silently become a label."""
+    an unparseable verdict must not silently become a label.
+
+    Tolerant of the obvious truncations because the rubric asks for
+    ACCEPTABLE/UNACCEPTABLE and models answer with what they consider
+    equivalent: gemini-2.5-flash replies "ACCEPT"/"UNACCEPT", which the strict
+    version rejected. It discriminated perfectly and scored nothing, which is
+    the failure mode this whole function exists to avoid.
+
+    Deliberately still strict about *unrecognised* replies. Guessing at a
+    verdict is worse than admitting there isn't one.
+    """
     text = reply.strip().upper()
-    if "UNACCEPTABLE" in text:
-        return Grade(False, "judge", "judge said UNACCEPTABLE")
-    if "ACCEPTABLE" in text:
-        return Grade(True, "judge", "judge said ACCEPTABLE")
+    if any(token in text for token in _REJECT):
+        return Grade(False, "judge", "judge rejected the candidate")
+    if any(token in text for token in _ACCEPT):
+        return Grade(True, "judge", "judge accepted the candidate")
     return None
 
 
