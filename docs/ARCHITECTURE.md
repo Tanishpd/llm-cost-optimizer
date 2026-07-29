@@ -304,13 +304,15 @@ actually found, and noticing that the unit suite caught one of fourteen.
 
 | Layer | Command | Catches | Blind to |
 |---|---|---|---|
-| **Unit** (794, hermetic) | `pytest -m "not integration"` | Logic inside a module | Whether modules are connected |
+| **Unit** (799, hermetic) | `pytest -m "not integration"` | Logic inside a module | Whether modules are connected |
 | **Wiring** | `tests/test_wiring.py` | Components not plugged in; settings wired to nothing | Anything the real lifespan cannot reach |
 | **Rendering** | `tests/test_dashboard.py` | JS that does not parse, run, or match the DOM | Visual layout — a bar can be the wrong width and still render |
-| **Doc consistency** (169) | `scripts/check_docs.py` | Docs contradicting the code | Whether the code is right |
+| **Doc consistency** (175) | `scripts/check_docs.py` | Docs contradicting the code | Whether the code is right |
 | **Integration** (10) | `pytest -m integration` | Real models, real Redis, the real OpenAI SDK | Anything needing sustained load |
 | **Load** | `scripts/loadtest.py` | Cost identities under concurrency, duplicate model calls | Correctness of a single request |
 | **Soak** | `scripts/soak.py` | Memory/fd growth, latency drift, counter divergence over time | Anything faster than one sampling window |
+| **Multi-worker** | `scripts/multiworker_check.py` | State that stopped being shared across processes | Single-process logic |
+| **Mutation** | `scripts/mutation.sh` | Assertions that would not fail if the code were wrong | Anything outside the pure modules |
 
 Two properties are worth naming because they are easy to lose:
 
@@ -325,11 +327,21 @@ and fail locally, which is the worst arrangement available.
 read by nothing. Every line ran; they just ran disconnected. `test_wiring.py`
 exists because coverage cannot express "and then it is used".
 
-**What is still not tested.** No property-based or mutation testing — nothing
-currently grades whether an assertion would fail if the code were wrong, only
-that the line executed. Concurrency is covered in a few places
-(`test_singleflight.py`, the audit writer's shutdown) but the multi-worker
-verification from M10 was done by hand and is not in CI.
+**Assertion strength is graded, not assumed.** `scripts/mutation.sh` asks
+whether a test would *fail* if the code were wrong — a different question from
+coverage, which only says the line ran. Baseline: 1953 mutants, 19 survivors,
+all changed prose or provably equivalent. Weekly, not a gate: its output needs
+reading rather than thresholding, and a percentage target pushes people into
+brittle tests to chase it.
+
+**Multi-worker state is verified in CI** by `scripts/multiworker_check.py`
+against four real processes. It is written to fail when state stops being
+*shared*, not when the gateway stops working — a per-process fallback works
+fine in each worker separately, and the only symptom is a limit multiplied by
+the worker count.
+
+**What is still not tested.** No property-based testing (`hypothesis`) over the
+pure functions.
 
 ## 10. Extension seams
 
