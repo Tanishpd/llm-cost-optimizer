@@ -8,6 +8,11 @@ the release workflow refuses to build a tag that disagrees with it.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-07-29
+
+The version where the central claim stopped being a hypothesis. 0.2.0 could be
+operated; this one has measured whether its main idea works.
+
 ### Changed
 
 - **The calibration passes.** Both gates clear validation against a real
