@@ -137,6 +137,14 @@ been served locally.
 
 Raise that tenant's `daily_budget_usd`, or tell them to drop the pin.
 
+**Two things about the cap that matter when you are reconciling spend.** It is
+checked before the call and recorded after, because cost is not knowable until
+the provider replies — so a tenant can **overshoot by up to one request**
+(`MAX_OUTPUT_TOKENS × FRONTIER_PRICE_OUT`, ~$0.04 at the defaults). And the
+ledger lives in Redis: with Redis unreachable, budgets **fail open** and are not
+enforced at all. If a tenant appears to have blown through their cap, check
+`/healthz` for Redis before assuming the ledger is wrong.
+
 ### 503 `spend_ceiling_reached`
 
 The gateway's own ceiling bound **and** no local tier could serve. Two faults at

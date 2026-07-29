@@ -38,6 +38,27 @@ def check(name: str, ok: bool, detail: str = "") -> None:
         failures.append(name)
 
 
+def docs_documenting(*markers: str) -> list[str]:
+    """Docs that *document* a feature, identified by its configuration knob.
+
+    A doc that explains budgets names `DEFAULT_DAILY_BUDGET_USD`; one that
+    merely says the word "budget" may be talking about disk space, which
+    RESEARCH.md 7 does. Heading text was tried first and matched both that and
+    RUNBOOK's `### 402 budget_exhausted`, which is a symptom entry rather than
+    an explanation.
+
+    Returns paths rather than a hardcoded list, so the caveat follows the
+    content. Splitting the README into SETUP/RUNNING/USAGE would otherwise
+    leave the moved sections unchecked while the checks stayed green.
+    """
+    out = []
+    for doc in DOCS:
+        text = doc.read_text()
+        if any(m in text for m in markers):
+            out.append(doc.relative_to(ROOT).as_posix())
+    return out
+
+
 def check_links() -> None:
     broken = []
     for doc in DOCS:
@@ -150,7 +171,10 @@ def check_streaming_is_not_oversold() -> None:
     # Markdown wraps, and the caveat is a full sentence, so it lands across a
     # line break as often as not. Normalize whitespace and drop emphasis rather
     # than forcing the prose to fit a grep.
-    for name in ("README.md", "docs/API.md", "docs/DECISIONS.md"):
+    # Not a hardcoded list: when the README was split into SETUP/RUNNING/
+    # USAGE, a fixed trio would have kept passing while the streaming section
+    # moved somewhere unchecked.
+    for name in docs_documenting("STREAM_CHUNK_CHARS", "stream: true", '"stream": true'):
         text = (ROOT / name).read_text()
         flat = re.sub(r"\s+", " ", text.replace("*", "")).lower()
         caveat = any(p in flat for p in (
@@ -170,10 +194,8 @@ def check_budget_caveats_are_stated() -> None:
     feature without them, because a reader would then reasonably believe the
     cap is exact and always applied. Neither is true.
     """
-    for name in ("README.md", "docs/API.md"):
+    for name in docs_documenting("DEFAULT_DAILY_BUDGET_USD", "daily_budget_usd"):
         flat = re.sub(r"\s+", " ", (ROOT / name).read_text().replace("*", "")).lower()
-        if "daily_budget" not in flat and "budget" not in flat:
-            continue
         check(f"{name} states the budget overshoot bound",
               "overshoot" in flat or "approximate by" in flat,
               "the cap is exceeded by up to one request; say so")
@@ -189,10 +211,8 @@ def check_audit_is_not_confused_with_telemetry() -> None:
     unless the distinction is written down, and the first person to
     consolidate them would delete the durable one.
     """
-    for name in ("README.md", "docs/API.md", "docs/DECISIONS.md"):
+    for name in docs_documenting("AUDIT_ENABLED", "AUDIT_PATH"):
         flat = re.sub(r"\s+", " ", (ROOT / name).read_text()).lower()
-        if "audit" not in flat:
-            continue
         check(f"{name} distinguishes the audit trail from telemetry",
               "capped" in flat or "10k" in flat or "survives restart" in flat,
               "say what telemetry cannot do that this does")
