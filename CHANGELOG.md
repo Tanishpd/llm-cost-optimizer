@@ -18,6 +18,65 @@ than a mistake. `0.2.0` has notes below but was never tagged.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-07-29
+
+The version that went back over its own claims and found several of them
+stale. No runtime behaviour changed in the gateway; what changed is that the
+documentation now says what is true, and the eval harness can no longer spend
+without a limit.
+
+Minor rather than patch: `EVAL_MAX_SPEND_USD` ships armed, which is a
+behaviour change for anyone running the eval, and four new documents are not
+a bug fix.
+
+### Added
+
+- **A spend ceiling on the eval harness.** `EVAL_MAX_SPEND_USD`, default `$5`,
+  checked *before* each paid call — a ceiling that notices only once it has
+  been crossed is a report, not a limit. `MAX_DAILY_SPEND_USD` lives in
+  `BudgetLedger` on the gateway's request path, and `run_eval.py` calls the
+  provider directly without ever touching it, so the one component that
+  deliberately spends real money had no cap at all. When it binds, the run
+  stops the way a daily quota does, fitting on what was already checkpointed.
+- **[docs/RESULTS.md](docs/RESULTS.md)** — every measured figure in one place,
+  generated from `eval/calibrator.json` and `eval/runs/` rather than
+  transcribed, with equal space given to what the gate *cannot* do. A doc check
+  asserts the headline numbers still match the fitted calibrator.
+- **Setup, running and usage split out of the README** into
+  [SETUP.md](docs/SETUP.md), [RUNNING.md](docs/RUNNING.md) and
+  [USAGE.md](docs/USAGE.md); the README drops from 700 lines to an overview.
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — the repo went public without one,
+  and following the README left you unable to run a single test, since
+  `requirements.txt` carries no pytest.
+
+### Fixed
+
+- **An empty `FRONTIER_API_KEY` was reported as an unreachable upstream.**
+  `Bearer ` with nothing after it is an illegal header, so httpx raises before
+  any connection is attempted — advising you to start a mock that is usually
+  already running. The gateway had never sent a request; the mock's access log
+  had zero entries.
+- **An open circuit discarded whatever opened it**, so a misconfigured key and
+  a dead upstream read identically. The breaker now carries the cause and the
+  provider's own remedy forward.
+- **The latency table was seventeen milestones stale.** The 3B measured 4.5 s
+  against a claimed 862 ms — not machine load: `ollama ps` reports 100% GPU and
+  the models run at 79.9 and 36.4 tok/s, so 120 tokens *is* 3.3 s. Both tables
+  now carry median `tokens_out`, because without it they read as cost-per-tier
+  while mostly measuring answer length.
+- **"Gate 1 accepts 85%"** was true of the 67 auto-gradable prompts in `raw`
+  mode and went stale twice over. Under the shipped calibrated default it
+  accepts **31%**. D1's reversal condition still clears comfortably.
+- **A property test was wrong about its own subject.** The value `\` + `n`
+  escapes to `\\n`, and the test's chained `.replace()` matched the second
+  backslash with the `n`. The escaping was correct; the inverse was not.
+- **An integration test reported a missing dependency as a contract failure** —
+  it now skips with the command to start a gateway.
+- **`check_docs` was rewriting history.** Milestone entries in PLAN.md record
+  what was true *at that milestone*; a global find-and-replace dragged M21's
+  line through eight values in one afternoon. Restored from git, and the counts
+  must now be monotonic down the file.
+
 ## [0.4.0] — 2026-07-29
 
 The version that acts on what 0.3.0 measured, and closes the half of tenancy
