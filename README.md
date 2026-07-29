@@ -243,7 +243,8 @@ ollama pull nomic-embed-text
 
 # 3. Python
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt          # to run the gateway
+# pip install -r requirements-dev.txt    # to run the tests as well
 cp .env.example .env
 
 # 4. Verify the environment before building on it — checks models, disk, RAM, and logprobs
@@ -471,10 +472,13 @@ from exactly-summed integer token counters.
 
 ## How it's tested
 
+Contributing? [CONTRIBUTING.md](CONTRIBUTING.md) has the loop these three
+commands belong to, and what CI will check that they do not.
+
 ```bash
-.venv/bin/python -m pytest -m "not integration"   # 845, hermetic — needs nothing running
+.venv/bin/python -m pytest -m "not integration"   # 903, hermetic — needs nothing running
 .venv/bin/ruff check app eval scripts mock_frontier tests
-.venv/bin/python scripts/check_docs.py            # 133 cross-document checks
+.venv/bin/python scripts/check_docs.py            # 192 cross-document checks
 ```
 
 Six layers, split by what each can and cannot see. The split isn't aspirational —
@@ -486,7 +490,7 @@ suite had caught **one of fourteen**.
 | **Unit** (903) | logic inside a module | whether modules are connected |
 | **Wiring** | components not plugged in; settings wired to nothing | anything the real lifespan can't reach |
 | **Rendering** | dashboard JS that doesn't parse, run, or match the DOM | visual layout |
-| **Doc checks** (189) | docs contradicting the code | whether the code is right |
+| **Doc checks** (192) | docs contradicting the code | whether the code is right |
 | **Integration** (10) | real models, real Redis, the real OpenAI SDK | sustained load |
 | **Load** | cost identities under concurrency | correctness of one request |
 | **Soak** | memory/fd growth, latency drift over time | anything faster than a window |
@@ -671,7 +675,7 @@ $ .venv/bin/python scripts/preflight.py
   ✓ redis reachable, no modules (brute-force cosine, as designed)
 
 $ .venv/bin/python scripts/check_docs.py
-  all 189 checks passed
+  all 192 checks passed
 ```
 
 The 10 integration tests need a live Ollama — one also needs the `openai` SDK, because a
