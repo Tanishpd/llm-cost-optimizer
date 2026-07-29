@@ -1170,7 +1170,7 @@ They all still passed. `REAL_LOGPROBS` scores `0.9725`, which clears `0.55` and
 `0.92` alike, so the suite was green by coincidence rather than because the
 gates behaved. Both factories now pin `confidence_mode="raw"` explicitly.
 
-903 unit tests, 200 doc checks.
+903 unit tests, 208 doc checks.
 
 ---
 

@@ -224,6 +224,7 @@ Full instructions, including the 8 GB constraints this was designed around:
 
 | | |
 |---|---|
+| **[RESULTS.md](docs/RESULTS.md)** | What was measured, and what it does not show |
 | **[SETUP.md](docs/SETUP.md)** | Install it, and whether your machine can host it |
 | **[RUNNING.md](docs/RUNNING.md)** | Start it, point it at a real provider, containers, health, load |
 | **[USAGE.md](docs/USAGE.md)** | Call it: auth, tenants, budgets, rate limits, streaming, the audit trail |
@@ -239,7 +240,7 @@ commands belong to, and what CI will check that they do not.
 ```bash
 .venv/bin/python -m pytest -m "not integration"   # 903, hermetic — needs nothing running
 .venv/bin/ruff check app eval scripts mock_frontier tests
-.venv/bin/python scripts/check_docs.py            # 200 cross-document checks
+.venv/bin/python scripts/check_docs.py            # 208 cross-document checks
 ```
 
 Six layers, split by what each can and cannot see. The split isn't aspirational —
@@ -251,7 +252,7 @@ suite had caught **one of fourteen**.
 | **Unit** (903) | logic inside a module | whether modules are connected |
 | **Wiring** | components not plugged in; settings wired to nothing | anything the real lifespan can't reach |
 | **Rendering** | dashboard JS that doesn't parse, run, or match the DOM | visual layout |
-| **Doc checks** (200) | docs contradicting the code | whether the code is right |
+| **Doc checks** (208) | docs contradicting the code | whether the code is right |
 | **Integration** (10) | real models, real Redis, the real OpenAI SDK | sustained load |
 | **Load** | cost identities under concurrency | correctness of one request |
 | **Soak** | memory/fd growth, latency drift over time | anything faster than a window |
@@ -402,7 +403,7 @@ $ .venv/bin/python scripts/preflight.py
   ✓ redis reachable, no modules (brute-force cosine, as designed)
 
 $ .venv/bin/python scripts/check_docs.py
-  all 200 checks passed
+  all 208 checks passed
 ```
 
 The 10 integration tests need a live Ollama — one also needs the `openai` SDK, because a
@@ -413,6 +414,7 @@ in CI; the unit suite is hermetic and is re-run behind a dead proxy to keep it t
 
 | Document | What's in it |
 |---|---|
+| **[docs/RESULTS.md](docs/RESULTS.md)** | What was measured — the calibration, the limits, the cost |
 | **[docs/SETUP.md](docs/SETUP.md)** | Install it, and whether your machine can host it |
 | **[docs/RUNNING.md](docs/RUNNING.md)** | Start it, real providers, containers, multi-worker, health, load |
 | **[docs/USAGE.md](docs/USAGE.md)** | Call it — auth, tenants, budgets, rate limits, streaming, audit |
