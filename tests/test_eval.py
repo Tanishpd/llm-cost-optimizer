@@ -526,3 +526,40 @@ async def test_pacing_holds_a_minimum_gap():
     await re_mod.paced(0.15)
     await re_mod.paced(0.15)
     assert time.perf_counter() - started >= 0.15
+
+
+@pytest.mark.parametrize("reply,expected", [
+    ("ACCEPTABLE", True),
+    ("UNACCEPTABLE", False),
+    ("ACCEPT", True),                  # gemini-2.5-flash's actual wording
+    ("UNACCEPT", False),
+    ("NOT ACCEPTABLE", False),
+    ("  acceptable  ", True),
+    ("Verdict: UNACCEPTABLE", False),
+])
+def test_the_judge_parser_accepts_the_wordings_models_actually_use(reply, expected):
+    """Written against one model's phrasing, it returned None for another's —
+    gemini-2.5-flash discriminated perfectly and scored nothing."""
+    from eval.grading import parse_judge
+
+    g = parse_judge(reply)
+    assert g is not None, f"{reply!r} produced no label"
+    assert g.acceptable is expected
+
+
+@pytest.mark.parametrize("reply", ["", "maybe", "I think it's fine", "42"])
+def test_an_unrecognised_verdict_is_still_refused(reply):
+    """Tolerance must not become guessing. No label beats a wrong one."""
+    from eval.grading import parse_judge
+
+    assert parse_judge(reply) is None
+
+
+def test_rejection_is_never_read_as_acceptance():
+    """Every affirmative token is a substring of its negation. Checking
+    positives first would invert every rejection — the worst bug a grader can
+    have, and invisible in the output."""
+    from eval.grading import parse_judge
+
+    for reply in ("UNACCEPTABLE", "UNACCEPT", "NOT ACCEPTABLE", "unacceptable"):
+        assert parse_judge(reply).acceptable is False, reply

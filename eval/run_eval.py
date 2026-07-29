@@ -212,7 +212,13 @@ async def collect(
                         # a calibration with no labels fails silently at the
                         # very end after every call has been paid for. Count
                         # them, and stop early rather than spend the rest.
-                        unparseable.append((p.id, tier, verdict.content[:40]))
+                        # Record the raw verdict, not just the count. Without
+                        # it a parse failure is undiagnosable after the run:
+                        # you know a label is missing and have no way to learn
+                        # why, which is how a 25% label loss becomes a shrug.
+                        raw = (verdict.content or "").strip()
+                        result.label_reason[tier] = f"unparseable judge verdict: {raw[:120]!r}"
+                        unparseable.append((p.id, tier, raw[:40]))
                         if len(unparseable) >= 5 and not any(r.labels for r in results.values()):
                             raise RuntimeError(
                                 f"the judge returned {len(unparseable)} unparseable verdicts "
