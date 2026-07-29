@@ -593,11 +593,19 @@ judge       86 calls   in 60,768   out    232   thinking 0
 reference   43 calls   in    888   out 13,348   thinking 18,203  -> billed 31,551
 ```
 
+**Total: $0.1139.** At rates verified 2026-07-29 against Google's own pricing
+page — `gemini-3-flash-preview` $0.50 in / $3.00 out, `gemini-2.5-flash` $0.30
+in / $2.50 out, paid tier, per 1M tokens.
+
 Two things fall out. `reasoning_effort=none` works: 2.7 output tokens per
 verdict, no thinking. And on the reference, **thinking exceeded visible output
 by 36%** — Gemini's OpenAI layer reports no `reasoning_tokens` key, so those
 18,203 billed tokens are visible *only* as the gap in `total_tokens`. A cost
 report keyed on `completion_tokens` understates by that much and says nothing.
+Google's pricing page labels the output column *"including thinking tokens"*,
+which confirms the reading `billable_out` takes: everything that is not input
+is charged at the output rate. Of the $0.0951 the references cost, **$0.0546 —
+57% — was thinking.**
 
 **Provenance is now recorded with the fit.** A calibrator maps one specific
 model's logprob statistics onto P(acceptable); applied to a different model it
