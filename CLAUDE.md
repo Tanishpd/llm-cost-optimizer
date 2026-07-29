@@ -88,10 +88,19 @@ modes exist for this reason: `CONFIDENCE_MODE=raw` (thresholds 0.55 / 0.62 on `g
 `CONFIDENCE_MODE=calibrated` where 0.85 genuinely means "85% chance this tier's answer is as good as
 the frontier's". Don't collapse these two modes into one.
 
-**M6 ran and the answer was "stay in raw."** Gate `small` passed validation; gate `large` failed —
-good ECE (0.047, better than gate `small`'s) but no better than the base rate on Brier, i.e.
-calibrated without being useful. RESEARCH.md §3.4. Do not flip the default without re-running
-`eval/run_eval.py` and getting `should_flip() == True`.
+**The calibration now passes — and the shipped default is still `raw`, deliberately.** M6 failed
+(gate `large`: good ECE, no better than the base rate on Brier — calibrated without being useful,
+§3.4). The corrected real-frontier run passes both gates at n=110 and survives every counterfactual
+refit, §3.7. So 0.85 *is* earned. The default stays `raw` anyway because the fitted weights are
+specific to `qwen2.5:0.5b` / `qwen2.5:3b` on this dataset, and a default that hard-fails on any
+model change serves nobody. `CONFIDENCE_MODE=calibrated` is one line for a deployment running the
+models it was fitted on.
+
+**A calibrator is only valid for what it was fitted on.** `calibrator.json` carries `provenance`
+(models, token budget, dataset size, judge) and the lifespan **refuses to start** in `calibrated`
+mode when those disagree with the configured models. Not a warning: these weights map one model's
+logprob statistics onto P(acceptable), so pointed at another model they still return a number in
+[0, 1] that looks exactly like a probability. Nothing downstream can tell.
 
 **The calibrated path is wired but not exercised by default**, which is exactly how it silently
 rotted once: `CONFIDENCE_MODE=calibrated` was settable while `main.py` never loaded
@@ -134,6 +143,22 @@ part of the cache key (invariant 5), so if only one applied them, `/route`'s `ex
 preview would be computed from a different key than the real lookup. These two settings were
 defined, documented in `.env.example` *and* PLAN.md, and read by nothing at all until
 `tests/test_wiring.py` asked what every setting does.
+
+**The eval must generate answers at the length production serves.** `--max-tokens` defaulted to
+120 while the gateway serves `DEFAULT_MAX_TOKENS=512` and references got 1024, so the calibrator was
+fitted to answers a quarter the length of the ones it scores, and the judge compared truncated
+candidates against full-length references. 26% of local answers were cut off mid-sentence; every
+`reasoning` prompt was, which is why that category graded 0/26 and made `should_flip()` return
+`True` for the first time — on an artifact. RESEARCH.md §3.6. The default now follows
+`DEFAULT_MAX_TOKENS`, and `check_budget` refuses to extend a run cache across a change of budget:
+answer length feeds `n_tokens`, a calibrator feature, and both halves of a mixed cache look like
+valid rows.
+
+**A "pass" that moves when you re-slice the data has not been earned.** Before believing a flip,
+refit on subsets — it costs nothing, the run cache is on disk. Gate `large` passed on all 110
+prompts, failed with `reasoning` excluded, and passed by 0.006 Brier with truncated answers
+excluded. Check whether the *baseline* moved too: a more balanced dataset makes the base-rate
+predictor worse, and beating a weaker baseline is not the same as carrying more information.
 
 **The cascade is ordered data.** `app/cascade.py` holds a list of `(name, runner, gate)`; the
 executor walks it from the router's entry point. Adding or reordering a tier is a data change. Never
@@ -249,6 +274,12 @@ Every API response is cached to `eval/runs/*.json`; **always reuse that cache wh
 calibrators.** Never re-spend to recompute something already on disk, and never enable the real
 frontier for serving — only eval.
 
+**The run reports what it spent** — `ApiUsage` per paid call, printed as a cost summary at the end.
+It reports a *range* when the provider reports thinking tokens, because whether `completion_tokens`
+already includes them is provider-specific and guessing wrong is a multiple, not a rounding error.
+Prices (`FRONTIER_PRICE_*`, `EVAL_JUDGE_PRICE_*`) are placeholders — the judge is deliberately a
+different model from the reference (D11), so it needs its own rates, and neither pair is a quote.
+
 ## Running
 
 ```bash
@@ -288,16 +319,20 @@ which is worse than shared but far better than none.
 
 ## Current state
 
-**M0–M21 complete (2026-07-29).** The gateway runs and is hardened: all five tiers, both gates, eval
+**M0–M23 complete (2026-07-29).** The gateway runs and is hardened: all five tiers, both gates, eval
 harness, dashboard, auth, shared rate limiting, circuit breakers, structured logging, container
-image, streaming, per-tenant budgets, a durable audit trail. **845 unit + 10 integration
+image, streaming, per-tenant budgets, a durable audit trail. **872 unit + 10 integration
 tests** at 96% coverage, 185 doc-consistency checks. `python3 scripts/demo.py`
 walks every tier.
 
-**Shipping in `raw` confidence mode, not `calibrated`** — M6 fitted both calibrators and gate
-`large` failed its validation (good ECE, but no better than the base rate on Brier, i.e. calibrated
-without being useful). `should_flip()` requires both gates, so 0.85 has not been earned. RESEARCH.md
-§3.4.
+**The calibration passes. `raw` is still the shipped default.** The corrected real-frontier run
+(M23) passes both gates at n=110 — `small` ECE 0.040, Brier 0.136 vs base 0.242; `large` ECE 0.027,
+Brier 0.129 vs base 0.214 — and holds under every counterfactual refit except one that strips both
+hard categories at once. `should_flip()` is `True` and **0.85 is earned**. RESEARCH.md §3.7.
+
+The default remains `raw` because the fit is specific to `qwen2.5:0.5b` / `qwen2.5:3b` on this
+dataset, not because it failed. `CONFIDENCE_MODE=calibrated` enables it; the lifespan refuses to
+start if `calibrator.json`'s recorded provenance disagrees with the configured models.
 
 Measured, and now recorded in RESEARCH.md §3.1–3.2:
 

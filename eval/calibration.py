@@ -296,16 +296,29 @@ def should_flip(reports: dict[str, ValidationReport]) -> bool:
     return bool(reports) and all(r.passed for r in reports.values())
 
 
-def save(path: Path, calibrators: dict[str, Calibrator], reports: dict[str,
-    ValidationReport]) -> None:
+def save(
+    path: Path,
+    calibrators: dict[str, Calibrator],
+    reports: dict[str, ValidationReport],
+    provenance: dict[str, object] | None = None,
+) -> None:
     """Persist fits *and* their validation, so nobody can load a calibrator
-    without also being able to see whether it earned its place."""
+    without also being able to see whether it earned its place.
+
+    `provenance` records *what was calibrated*. A fit is only meaningful for
+    the models and answer length it was fitted on: these weights map
+    qwen2.5:0.5b's logprob statistics onto P(acceptable), and applying them to
+    a different model yields a number in [0, 1] that looks exactly like a
+    probability and is not one. Nothing downstream can detect that, which is
+    why the gateway refuses to start on a mismatch rather than warning.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({
         "calibrators": {g: asdict(c) for g, c in calibrators.items()},
         "validation": {g: r.as_dict() for g, r in reports.items()},
         "flip_recommended": should_flip(reports),
         "thresholds": {"max_ece": MAX_ECE, "max_ece_ci_upper": MAX_ECE_CI_UPPER},
+        "provenance": provenance or {},
     }, indent=2))
 
 

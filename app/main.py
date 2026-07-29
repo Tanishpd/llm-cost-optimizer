@@ -238,6 +238,27 @@ async def lifespan(app: FastAPI):
             "start and report a confidence the gates are not actually using. "
             "Run eval/run_eval.py, or set CONFIDENCE_MODE=raw."
         )
+    # A calibrator fitted on other models is worse than no calibrator. These
+    # weights map one specific model's logprob statistics onto P(acceptable);
+    # point them at a different model and they still return a number in
+    # [0, 1] that looks exactly like a probability. Nothing downstream can
+    # tell the difference, so the mismatch has to be caught here or never.
+    if settings.confidence_mode == "calibrated":
+        prov = json.loads(cal_path.read_text()).get("provenance") or {}
+        fitted = (prov.get("small_model"), prov.get("large_model"))
+        running = (settings.small_model, settings.large_model)
+        if any(fitted) and fitted != running:
+            raise RuntimeError(
+                f"{cal_path} was fitted on {fitted[0]} / {fitted[1]}, but this "
+                f"gateway runs {running[0]} / {running[1]}. Those probabilities "
+                "would be meaningless. Refit with eval/run_eval.py, or set "
+                "CONFIDENCE_MODE=raw."
+            )
+        if not any(fitted):
+            logger.warning(
+                "calibrators at %s record no provenance — cannot verify they were "
+                "fitted on %s / %s. Refit to stamp them.",
+                cal_path, *running)
     app.state.semantic_cache = SemanticCache(
         redis,
         threshold=settings.semantic_threshold,

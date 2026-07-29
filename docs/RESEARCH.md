@@ -458,15 +458,159 @@ were never collected — which would have roughly quintupled the judge-graded
 evidence. The wide ECE intervals are the visible consequence: at n≈69 with a
 7-feature fit, neither gate's point estimate is firm.
 
-The raw evidence is committed at `eval/runs/full.json` so this is reproducible
-without spending again; `python -m eval.run_eval --real-frontier --fit-only`
-refits it offline.
+The raw evidence is committed at `eval/runs/full-120tok.json` so this is
+reproducible without spending again; `python -m eval.run_eval --real-frontier
+--fit-only` refits it offline. (That file was `full.json` until §3.6 renamed it
+— the name records the token budget, which turned out to be the thing that
+mattered.)
 
 **Eight harness bugs surfaced on the way**, every one of them silent, in code
 that had never been run against a real provider — `EVAL_USE_REAL_FRONTIER` was
 a documented, settable flag nothing had exercised end to end. The same shape as
 the calibrated-mode bug of M13, and the same lesson: a path that ships disabled
 is a path that rots. See PLAN.md M21.
+
+### 3.6 The complete run (2026-07-29) — both gates "passed", and the result was an artifact
+
+With billing enabled the quota ceiling lifted and all 110 prompts collected in
+483s. For the first time `should_flip()` returned **`True`**.
+
+| gate | run | n | acceptable | ECE | Brier | base-rate Brier | verdict |
+|---|---|---|---|---|---|---|---|
+| `small` | M6 | 67 | 82% | 0.062 | 0.131 | 0.147 | PASS |
+| `small` | complete | 96 | 67% | 0.041 | **0.145** | 0.222 | PASS |
+| `large` | M6 | 67 | 85% | 0.047 | 0.141 | 0.127 | FAIL |
+| `large` | complete | 96 | 72% | 0.049 | **0.100** | 0.202 | PASS |
+
+**It was not flipped, because the pass does not survive scrutiny.**
+
+Note what moved. Gate `large`'s Brier improved (0.141 → 0.100) *and* the
+baseline it must beat worsened (0.127 → 0.202). The second movement is the
+larger one, and it has a specific cause: the acceptable rate fell from 85% to
+72%, and a more balanced dataset makes the base-rate predictor worse. Beating a
+weaker baseline is not the same as being more informative.
+
+The rate fell because of one category:
+
+```
+reasoning         0/26 =  0% acceptable
+code             15/25 = 60%
+summarization    15/21 = 71%
+obscure_factual  22/30 = 73%
+easy_factual     54/60 = 90%
+arithmetic       27/30 = 90%
+```
+
+**`--max-tokens` defaulted to 120 while `EVAL_REFERENCE_MAX_TOKENS` was 1024.**
+Reference answers ran to a median 1573 characters against the local tiers' 544
+— a 2.9x gap — and **26% of local answers (58/220) were cut off mid-sentence at
+the cap.** The judge was asked whether a candidate was as good as the reference
+while the candidate had a third of the budget. Every reasoning prompt was
+truncated, which is why that category reads 0/26.
+
+The local answers *are* genuinely bad on reasoning — qwen2.5:0.5b attributes
+rainbow colour order to "the Doppler effect", and the 3B defines density as "a
+material's ability to expand upon freezing". Those labels are correct. But
+truncation is an aggravating factor of unknown size, and it is not independent
+of category.
+
+**The counterfactual settles it.** Refitting on subsets of the same run
+(free — no new API calls):
+
+| subset | n (`large`) | `large` Brier vs base | `should_flip()` |
+|---|---|---|---|
+| all data | 96 | 0.100 vs 0.202 | **True** |
+| minus `reasoning` | 82 | 0.118 vs 0.133 | **False** |
+| minus truncated answers | 73 | 0.112 vs 0.118 | True |
+
+Removing the confound one way kills the flip; removing it another way leaves it
+alive by 0.006 Brier at n=73. A verdict that reverses depending on which
+defensible slice you take has not been earned. (The last two rows are the same
+73 prompts either way — *every* reasoning prompt was truncated, so the two
+confounds are one confound.)
+
+**Consequences, all now fixed:**
+
+- `--max-tokens` defaults to `DEFAULT_MAX_TOKENS` (512), what the gateway
+  actually serves. The old default fitted the calibrator to answers a quarter
+  the length of the ones it scores in production — and `n_tokens` is one of its
+  seven features.
+- `check_budget` refuses to extend a run cache across a change of token budget.
+  Both halves would look like valid rows, so nothing downstream could detect
+  it.
+- The harness records what it spends. It tracked tokens for the free local
+  tiers and nothing for the paid calls, so pricing a run meant estimating from
+  character counts afterwards. `ApiUsage` keeps the provider's usage block
+  whole — reasoning models bill hidden thinking as output under keys that vary
+  by provider, and a fixed schema drops exactly the tokens likeliest to
+  surprise you on a bill.
+
+The run is archived at `eval/runs/full-120tok.json`. This run's `True` was not
+acted on; §3.7 re-ran it with the budgets corrected.
+
+### 3.7 The corrected run (2026-07-29) — both gates pass, and it survives being taken apart
+
+Same 110 prompts, two parameters fixed: local tiers at `--max-tokens 512`
+(what the gateway serves) and the judge at `reasoning_effort=none`.
+
+| gate | n | acceptable | ECE | ECE CI | Brier | base-rate Brier | verdict |
+|---|---|---|---|---|---|---|---|
+| `small` | 110 | 59% | 0.040 | [—, 0.120] | **0.136** | 0.242 | **PASS** |
+| `large` | 110 | 69% | 0.027 | [—, 0.128] | **0.129** | 0.214 | **PASS** |
+
+`should_flip()` is `True`, and unlike §3.6 it stays `True` under scrutiny:
+
+| subset | flip | note |
+|---|---|---|
+| all data (n=110) | **True** | |
+| minus `reasoning` | **True** | the category that broke §3.6 |
+| minus `code` | **True** | where references truncated |
+| minus truncated references (19) | **True** | |
+| minus local answers at the cap (19) | **True** | |
+| minus `code` **and** `reasoning` (n=75) | False | only easy prompts remain, at 79%/84% acceptable |
+
+The single failure removes both hard categories at once, reconstructing the
+over-easy distribution that made M6 uninformative — 75 prompts where the
+base-rate predictor is already good and there is little left to be informative
+about. That is the expected failure, not evidence against the gate.
+
+**Label coverage is complete**: 0 unlabelled tier-slots, n=110 for both gates,
+against 96 in §3.6. Local truncation fell from 26% to 9%.
+
+**The acceptable rate fell as answers got longer** — 67%/72% at 120 tokens,
+59%/69% at 512 — which is worth stating because the naive expectation is the
+opposite. A longer answer has more room to be wrong, and the judge sees a
+complete piece of flawed reasoning rather than a fragment that might have been
+going somewhere. `reasoning` sits at 3/40 = 8% acceptable *with complete
+answers*, so the local models genuinely cannot do these; §3.6's 0/26 was
+mostly, but not only, truncation.
+
+**Measured cost, from provider-reported tokens** — the first run in this
+project to account for its own spend:
+
+```
+judge       86 calls   in 60,768   out    232   thinking 0
+reference   43 calls   in    888   out 13,348   thinking 18,203  -> billed 31,551
+```
+
+Two things fall out. `reasoning_effort=none` works: 2.7 output tokens per
+verdict, no thinking. And on the reference, **thinking exceeded visible output
+by 36%** — Gemini's OpenAI layer reports no `reasoning_tokens` key, so those
+18,203 billed tokens are visible *only* as the gap in `total_tokens`. A cost
+report keyed on `completion_tokens` understates by that much and says nothing.
+
+**Provenance is now recorded with the fit.** A calibrator maps one specific
+model's logprob statistics onto P(acceptable); applied to a different model it
+still returns a number in [0, 1] that looks exactly like a probability.
+`calibrator.json` carries the models, token budget, dataset size and judge, and
+the gateway **refuses to start** in `calibrated` mode when they disagree with
+what it is configured to run.
+
+**The shipped default stays `raw`** — not because 0.85 is unearned, but
+because these weights are specific to `qwen2.5:0.5b` / `qwen2.5:3b` on this
+dataset. A default that hard-fails on any model change serves nobody; `raw`
+works everywhere and `CONFIDENCE_MODE=calibrated` is one line for a deployment
+running the models this was fitted on.
 
 ## 4. Redis: no vector index today, but an upgrade path exists
 

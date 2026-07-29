@@ -23,7 +23,10 @@ import json
 import re
 import time
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import httpx
 import numpy as np
@@ -55,6 +58,45 @@ class TierResult:
     tokens_out: int
     latency_ms: float
     error: str = ""
+    # The budget this answer was generated under. Recorded because it is not a
+    # detail — answer length feeds `n_tokens`, a calibrator feature, so a cache
+    # mixing two budgets fits a model to a distribution that never existed.
+    # `_check_budget` refuses to resume across a change.
+    max_tokens: int = 0
+
+
+@dataclass
+class ApiUsage:
+    """What one *paid* call consumed.
+
+    The harness tracked `tokens_in`/`tokens_out` for the free local tiers and
+    nothing at all for the API calls that cost money, so the only way to price
+    a run was to estimate from character counts afterwards.
+
+    `detail` keeps the provider's usage block whole rather than mapping it onto
+    named fields. Reasoning models bill hidden thinking as output tokens and
+    report them under keys that differ per provider — Gemini nests
+    `reasoning_tokens` inside `completion_tokens_details`. A fixed schema drops
+    exactly the tokens most likely to be a surprise on the bill.
+    """
+
+    kind: str  # "reference" | "judge"
+    model: str
+    tokens_in: int
+    tokens_out: int
+    detail: dict[str, Any] = field(default_factory=dict)
+    # `total_tokens`, kept because it is the only place some providers admit to
+    # thinking. Measured against Gemini's OpenAI layer on 2026-07-29:
+    #
+    #   judge, reasoning_effort=none   prompt 9 + completion 2 = total 11
+    #   judge, unset                   prompt 9 + completion 2 = total 34
+    #   gemini-3-flash-preview         prompt 9 + completion 2 = total 57
+    #
+    # No `reasoning_tokens` key anywhere in the response — the thinking is
+    # visible *only* as the gap in `total_tokens`. A cost report keyed on
+    # `completion_tokens` alone understates by whatever that gap is, silently,
+    # which for the third row is 23x the visible output.
+    tokens_total: int = 0
 
 
 @dataclass
@@ -68,6 +110,7 @@ class PromptResult:
     labels: dict[str, bool] = field(default_factory=dict)
     label_source: dict[str, str] = field(default_factory=dict)
     label_reason: dict[str, str] = field(default_factory=dict)
+    usage: list[ApiUsage] = field(default_factory=list)
 
 
 def _run_path(tag: str) -> Path:
@@ -83,7 +126,12 @@ def load_cached(tag: str) -> dict[str, PromptResult]:
     out = {}
     for pid, data in raw.items():
         tiers = {k: TierResult(**v) for k, v in (data.pop("tiers", {}) or {}).items()}
-        out[pid] = PromptResult(**data, tiers=tiers)
+        # Runs recorded before usage accounting existed have no `usage` key.
+        # They stay loadable — the cost report just reports what it has and
+        # says how many calls predate the accounting, rather than either
+        # crashing or quietly reporting $0.00 for a run that cost money.
+        usage = [ApiUsage(**u) for u in (data.pop("usage", []) or [])]
+        out[pid] = PromptResult(**data, tiers=tiers, usage=usage)
     return out
 
 
@@ -96,6 +144,136 @@ def save_cached(tag: str, results: dict[str, PromptResult]) -> None:
             indent=2,
         )
     )
+
+
+def usage_of(kind: str, model: str, completion) -> ApiUsage:
+    """Pull one paid call's accounting off a Completion, keeping the provider's
+    own usage block for whatever it reports beyond the two standard counts."""
+    block = (completion.raw or {}).get("usage") or {}
+    return ApiUsage(
+        kind=kind,
+        model=model,
+        tokens_in=completion.tokens_in,
+        tokens_out=completion.tokens_out,
+        tokens_total=int(block.get("total_tokens") or 0),
+        detail={k: v for k, v in block.items()
+                if k not in ("prompt_tokens", "completion_tokens", "total_tokens")},
+    )
+
+
+# Hidden thinking is billed as output and reported — when it is reported at all
+# — under a key that differs per provider. Gemini's OpenAI-compatible layer
+# nests it; the native shape spells it `thoughts_token_count`.
+_THINKING_KEYS = ("reasoning_tokens", "thoughts_token_count", "thinking_tokens")
+
+
+def thinking_tokens(usage: ApiUsage) -> int:
+    """Billed-but-invisible output tokens, wherever the provider put them.
+
+    This project has already been bitten by these once: the judge was called
+    with `max_tokens=10`, thinking consumed the entire budget, and every
+    verdict came back empty — a run that would have produced zero labels after
+    paying for every call.
+
+    Two sources, and the second is the one that matters in practice. A named
+    key (`reasoning_tokens`) is the documented shape and is what OpenAI sends.
+    **Gemini's OpenAI-compatible layer sends no such key** — its thinking shows
+    up only as the arithmetic gap in `total_tokens`, so a reader looking for
+    the documented field finds nothing and reports zero.
+    """
+    def dig(d: dict[str, Any]) -> int:
+        for key in _THINKING_KEYS:
+            value = d.get(key)
+            if isinstance(value, int) and value > 0:
+                return value
+        for value in d.values():
+            if isinstance(value, dict) and (found := dig(value)):
+                return found
+        return 0
+
+    if named := dig(usage.detail):
+        return named
+    gap = usage.tokens_total - usage.tokens_in - usage.tokens_out
+    return max(0, gap)
+
+
+def billable_out(usage: ApiUsage) -> int:
+    """Output tokens actually charged, which is not `completion_tokens`.
+
+    When the provider reports `total_tokens`, it is authoritative and settles
+    the question outright: everything that is not input is output, thinking
+    included. When it does not, `completion_tokens` is the best available
+    figure — a named `reasoning_tokens` is already counted inside it per
+    OpenAI's spec, so adding it would double-count.
+    """
+    if usage.tokens_total:
+        return max(usage.tokens_out, usage.tokens_total - usage.tokens_in)
+    return usage.tokens_out
+
+
+def _money(tokens: int, price_per_million: Decimal) -> Decimal:
+    """Costs are Decimal, never float accumulation (CLAUDE.md conventions)."""
+    return (Decimal(tokens) / Decimal(1_000_000)) * price_per_million
+
+
+def cost_report(
+    results: dict[str, PromptResult],
+    *,
+    prices: dict[str, tuple[Decimal, Decimal]],
+) -> str:
+    """What the run actually cost, from provider-reported tokens.
+
+    Reports a *range* when thinking tokens are present. Whether
+    `completion_tokens` already includes them is provider-specific and not
+    something this code can determine from one response, so it shows the
+    as-reported figure and the if-billed-on-top figure rather than picking one
+    and being quietly wrong by several multiples.
+    """
+    agg: dict[str, dict[str, int]] = {}
+    for r in results.values():
+        for u in r.usage:
+            a = agg.setdefault(u.kind, {"calls": 0, "in": 0, "out": 0,
+                                        "billed": 0, "think": 0, "exact": 0})
+            a["calls"] += 1
+            a["in"] += u.tokens_in
+            a["out"] += u.tokens_out
+            a["billed"] += billable_out(u)
+            a["think"] += thinking_tokens(u)
+            a["exact"] += 1 if u.tokens_total else 0
+
+    if not agg:
+        return ("  no paid-call usage recorded (free run, or a cache written "
+                "before usage accounting existed)")
+
+    lines = ["  paid API usage"]
+    low = high = Decimal(0)
+    for kind, a in sorted(agg.items()):
+        price_in, price_out = prices.get(kind, (Decimal(0), Decimal(0)))
+        base = _money(a["in"], price_in) + _money(a["billed"], price_out)
+        low += base
+        # Only ambiguous where the provider never reported a total; there,
+        # thinking might sit outside `completion_tokens` and go uncharged here.
+        unknown = a["think"] if a["exact"] < a["calls"] else 0
+        high += base + _money(unknown, price_out)
+        think = f"  thinking {a['think']:>7,}" if a["think"] else ""
+        lines.append(f"    {kind:<10} {a['calls']:>4} calls   "
+                     f"in {a['in']:>8,}   out {a['out']:>7,}{think}")
+        lines.append(f"    {'':<10} billed out {a['billed']:>7,}  @ "
+                     f"${price_in}/M in, ${price_out}/M out -> ${base:.4f}")
+
+    total_think = sum(a["think"] for a in agg.values())
+    if high > low:
+        lines.append(f"\n  cost: ${low:.4f} to ${high:.4f}")
+        lines.append("        some calls reported no total_tokens, so whether their")
+        lines.append("        thinking is already inside completion_tokens is unknown.")
+    else:
+        lines.append(f"\n  cost: ${low:.4f}")
+        if total_think:
+            lines.append(f"        includes {total_think:,} thinking tokens, which are billed as")
+            lines.append("        output and are absent from completion_tokens.")
+    lines.append("        at configured prices — verify these against the provider's")
+    lines.append("        current rates; the defaults are placeholders, not quotes.")
+    return "\n".join(lines)
 
 
 async def run_tier(
@@ -113,7 +291,8 @@ async def run_tier(
             top_logprobs=5,
         )
     except ProviderError as exc:
-        return TierResult(tier, model, "", {}, 0, 0, 0.0, error=str(exc))
+        return TierResult(tier, model, "", {}, 0, 0, 0.0, error=str(exc),
+                          max_tokens=max_tokens)
 
     metrics = extract_metrics(completion.logprobs)
     return TierResult(
@@ -124,6 +303,42 @@ async def run_tier(
         tokens_in=completion.tokens_in,
         tokens_out=completion.tokens_out,
         latency_ms=completion.latency_ms,
+        max_tokens=max_tokens,
+    )
+
+
+class BudgetMismatch(RuntimeError):
+    """The run cache was generated under a different `--max-tokens`."""
+
+
+def check_budget(
+    cached: dict[str, PromptResult], max_tokens: int, tag: str
+) -> None:
+    """Refuse to extend a run cache across a change of token budget.
+
+    Answer length is not cosmetic here: `n_tokens` is one of the seven
+    calibrator features, and a truncated answer scores differently from a
+    complete one. Resuming a 120-token cache under a 512-token budget fits a
+    distribution that no single configuration ever produced — and nothing
+    downstream can detect it, because both halves look like valid rows.
+
+    Caches written before `max_tokens` was recorded carry 0 and are treated as
+    unknown rather than mismatched; there is no way to tell, and refusing to
+    load every historical run would be worse than saying so.
+    """
+    budgets = {tr.max_tokens for r in cached.values()
+               for tr in r.tiers.values() if tr.max_tokens}
+    stale = sorted(b for b in budgets if b != max_tokens)
+    if not stale:
+        return
+    raise BudgetMismatch(
+        f"eval/runs/{tag}.json holds answers generated at max_tokens="
+        f"{', '.join(str(b) for b in stale)}, but this run asks for "
+        f"{max_tokens}. Mixing them corrupts the `n_tokens` feature.\n"
+        f"       Either re-run at --max-tokens {stale[0]}, or start a clean "
+        f"cache:\n"
+        f"         rm eval/runs/{tag}.json        # discards paid results\n"
+        f"         python -m eval.run_eval --real-frontier --tag {tag}2"
     )
 
 
@@ -142,8 +357,11 @@ async def collect(
     judge_max_tokens: int = 64,
     reference_max_tokens: int = 512,
     call_interval: float = 0.0,
+    judge_reasoning_effort: str = "",
+    reference_reasoning_effort: str = "",
 ) -> dict[str, PromptResult]:
     cached = load_cached(tag)
+    check_budget(cached, max_tokens, tag)
     unparseable: list[tuple[str, str, str]] = []
     results: dict[str, PromptResult] = dict(cached)
 
@@ -181,9 +399,11 @@ async def collect(
                         messages=[{"role": "user", "content": p.prompt}],
                         # Not `max_tokens`: that is the *local* tiers' budget.
                         max_tokens=reference_max_tokens,
+                        reasoning_effort=reference_reasoning_effort,
                     ),
                     what=f"{p.id} reference",
                 )
+                result.usage.append(usage_of("reference", frontier_model, ref))
                 if ref.finish_reason == "length":
                     # A truncated reference is worse than no reference: the
                     # judge compares against a fragment and the label looks
@@ -203,9 +423,11 @@ async def collect(
                                  "content": judge_prompt(p.prompt, ref.content, tr.content)},
                             ],
                             max_tokens=judge_max_tokens,
+                            reasoning_effort=judge_reasoning_effort,
                         ),
                         what=f"{p.id} judge/{tier}",
                     )
+                    result.usage.append(usage_of("judge", judge_model, verdict))
                     g = parse_judge(verdict.content)
                     if g is None:
                         # A judge that returns nothing produces no labels, and
@@ -240,6 +462,20 @@ async def collect(
             save_cached(tag, results)  # checkpoint after every prompt
 
     return results
+
+
+class DailyQuotaExhausted(RuntimeError):
+    """A per-day quota is gone. Distinct from a per-minute limit because the
+    right response is opposite: a minute limit is worth waiting out, a day
+    limit is not — the wait is hours, and retrying only burns the backoff.
+
+    Raised so the caller can stop cleanly with progress saved rather than
+    discover it after five doublings and a crash.
+    """
+
+
+# Google spells it in the quotaId; the shape is stable across their APIs.
+_PER_DAY_RE = re.compile(r"PerDay|per_day|RequestsPerDay", re.I)
 
 
 _last_call_at = 0.0
@@ -281,6 +517,8 @@ async def with_retry(call, *, what: str, attempts: int = 6, base_delay: float = 
         try:
             return await call()
         except (ProviderUnavailable, ProviderTimeout) as exc:
+            if _PER_DAY_RE.search(str(exc)):
+                raise DailyQuotaExhausted(str(exc)[:200]) from exc
             if attempt == attempts - 1:
                 raise
             # Providers usually say how long to wait; Gemini puts it in the
@@ -314,12 +552,16 @@ def build_matrix(
     return np.array(X, dtype=float), np.array(y, dtype=float), ids
 
 
-async def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """Separate from `main` so a test can assert on the real flags rather than
+    on a reconstruction of them, which would pass while the parser was wrong."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--real-frontier", action="store_true",
                         help="call a real API for references and judging (COSTS MONEY)")
     parser.add_argument("--limit", type=int, default=0, help="only run the first N prompts")
-    parser.add_argument("--max-tokens", type=int, default=120)
+    parser.add_argument("--max-tokens", type=int, default=0,
+                        help="local tier output budget (default: "
+                             "DEFAULT_MAX_TOKENS, what the gateway serves)")
     parser.add_argument("--tag", default="", help="run cache name (default: auto or full)")
     parser.add_argument("--fit-only", action="store_true",
                         help="fit from the existing run cache without collecting "
@@ -329,7 +571,11 @@ async def main() -> int:
                         help="only the prompts that need the real API — the path "
                              "--limit cannot reach, since the dataset starts with "
                              "auto-gradable ones")
-    args = parser.parse_args()
+    return parser
+
+
+async def main() -> int:
+    args = build_parser().parse_args()
 
     # Settings, not os.getenv — it is the project convention (CLAUDE.md) and,
     # more practically, it is what reads `.env`. Reading the environment
@@ -340,6 +586,14 @@ async def main() -> int:
     settings = get_settings()
     use_real = args.real_frontier or settings.eval_use_real_frontier
     tag = args.tag or ("full" if use_real else "auto")
+
+    # Default to what the gateway actually serves. It used to default to 120,
+    # which meant the calibrator was fitted to answers a quarter the length of
+    # the ones it would score in production — and `n_tokens` is one of its
+    # seven features. It also made the judge compare a truncated local answer
+    # against a full-length reference, which reads as "incomplete" and cost
+    # the local tiers labels they had earned.
+    max_tokens = args.max_tokens or settings.default_max_tokens
 
     prompts = DATASET if use_real else [p for p in DATASET if p.grade == "auto"]
     if args.fit_only:
@@ -354,7 +608,8 @@ async def main() -> int:
 
     print(f"\ndataset: {summary()}")
     mode_label = "FULL (real API)" if use_real else "AUTO (free)"
-    print(f"running: {len(prompts)} prompt(s), mode={mode_label}")
+    print(f"running: {len(prompts)} prompt(s), mode={mode_label}, "
+          f"local max_tokens={max_tokens}")
     print(f"cache:   eval/runs/{tag}.json\n")
 
     frontier = judge = None
@@ -376,8 +631,13 @@ async def main() -> int:
             print("       A real calibration needs a real provider. See the README.")
             return 2
 
-        print(f"  frontier: {settings.frontier_model} at {base}")
-        print(f"  judge:    {settings.eval_judge_model} at {judge_base}")
+        def _effort(value: str) -> str:
+            return f", reasoning_effort={value}" if value else ""
+
+        print(f"  frontier: {settings.frontier_model} at {base}"
+              f"{_effort(settings.eval_reference_reasoning_effort)}")
+        print(f"  judge:    {settings.eval_judge_model} at {judge_base}"
+              f"{_effort(settings.eval_judge_reasoning_effort)}")
         if judge_base != base:
             print("  note:     judge and frontier are different providers "
                   "(deliberate — no model grades its own output, D11)")
@@ -388,12 +648,14 @@ async def main() -> int:
 
     try:
         started = time.perf_counter()
-        results = await collect(
+        results = {}
+        try:
+            results = await collect(
             prompts,
             tag=tag,
             small_model=settings.small_model,
             large_model=settings.large_model,
-            max_tokens=args.max_tokens,
+            max_tokens=max_tokens,
             use_real_frontier=use_real,
             frontier=frontier,
             judge=judge,
@@ -402,12 +664,38 @@ async def main() -> int:
             judge_max_tokens=settings.eval_judge_max_tokens,
             reference_max_tokens=settings.eval_reference_max_tokens,
             call_interval=settings.eval_min_call_interval_s,
+            judge_reasoning_effort=settings.eval_judge_reasoning_effort,
+            reference_reasoning_effort=settings.eval_reference_reasoning_effort,
         )
+        except DailyQuotaExhausted as exc:
+            # A per-day quota is not worth waiting out, and every prompt
+            # completed so far is already on disk. Reload and fit what we have
+            # — a run that stops with a usable partial result beats one that
+            # crashes with the same data and no fit.
+            results = load_cached(tag)
+            done = len(results)
+            print(f"\n  DAILY QUOTA EXHAUSTED after {done}/{len(DATASET)} prompts.")
+            print(f"  {exc}")
+            print("  Progress is saved. Re-run the same command after the quota")
+            print("  resets (Google's is midnight Pacific) to continue.")
+            print("  Fitting on what has been collected so far:\n")
+        except BudgetMismatch as exc:
+            # Not a crash — a refusal, with the two ways out spelled in the
+            # message. A traceback here would bury them.
+            print(f"\nERROR: {exc}\n")
+            return 2
     finally:
         if client is not None:
             await client.aclose()
 
     print(f"\ncollected in {time.perf_counter() - started:.0f}s\n")
+
+    if use_real:
+        print(cost_report(results, prices={
+            "reference": (settings.frontier_price_in, settings.frontier_price_out),
+            "judge": (settings.eval_judge_price_in, settings.eval_judge_price_out),
+        }))
+        print()
 
     calibrators, reports = {}, {}
     for gate in ("small", "large"):
@@ -438,7 +726,20 @@ async def main() -> int:
         print("run `python -m eval.report` for the cost-vs-quality frontier.\n")
         return 0
 
-    save(CALIBRATOR_PATH, calibrators, reports)
+    # What was calibrated, so a later reader — or the gateway at startup — can
+    # tell whether these weights apply to the models actually configured.
+    budgets = sorted({tr.max_tokens for r in results.values()
+                      for tr in r.tiers.values() if tr.max_tokens})
+    save(CALIBRATOR_PATH, calibrators, reports, provenance={
+        "small_model": settings.small_model,
+        "large_model": settings.large_model,
+        "max_tokens": budgets[0] if len(budgets) == 1 else budgets,
+        "n_prompts": len(results),
+        "judge_model": settings.eval_judge_model if use_real else "",
+        "frontier_model": settings.frontier_model if use_real else "",
+        "graded_against": "real frontier" if use_real else "ground truth only",
+        "fitted_at": datetime.now(UTC).isoformat(timespec="seconds"),
+    })
     shown = (CALIBRATOR_PATH.relative_to(Path.cwd())
              if CALIBRATOR_PATH.is_relative_to(Path.cwd()) else CALIBRATOR_PATH)
     print(f"\nwrote {shown}")

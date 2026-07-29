@@ -563,3 +563,418 @@ def test_rejection_is_never_read_as_acceptance():
 
     for reply in ("UNACCEPTABLE", "UNACCEPT", "NOT ACCEPTABLE", "unacceptable"):
         assert parse_judge(reply).acceptable is False, reply
+
+
+async def test_a_per_day_quota_stops_immediately_instead_of_backing_off():
+    """A minute limit is worth waiting out; a day limit is not.
+
+    Retrying a per-day quota burns the whole backoff ladder
+    (30+60+120+240+480s) to rediscover something that will not change for
+    hours — and then crashes, losing the fit for data already on disk.
+    """
+    import time
+
+    from app.providers.base import ProviderUnavailable
+    from eval.run_eval import DailyQuotaExhausted, with_retry
+
+    calls = {"n": 0}
+
+    async def daily_capped():
+        calls["n"] += 1
+        raise ProviderUnavailable(
+            'frontier rate-limited the request (429): {"quotaId": '
+            '"GenerateRequestsPerDayPerProjectPerModel-FreeTier", "quotaValue": "20"}')
+
+    started = time.perf_counter()
+    with pytest.raises(DailyQuotaExhausted):
+        await with_retry(daily_capped, what="probe", base_delay=30.0)
+
+    assert calls["n"] == 1, "it retried a quota that will not clear for hours"
+    assert time.perf_counter() - started < 1.0, "it backed off anyway"
+
+
+async def test_a_per_minute_limit_is_still_retried():
+    """The distinction has to cut both ways, or the fix trades one failure for
+    another."""
+    from app.providers.base import ProviderUnavailable
+    from eval.run_eval import with_retry
+
+    calls = {"n": 0}
+
+    async def minute_capped():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ProviderUnavailable("429: Please retry in 0.05s. RESOURCE_EXHAUSTED")
+        return "ok"
+
+    assert await with_retry(minute_capped, what="probe", base_delay=0.01) == "ok"
+    assert calls["n"] == 2
+
+
+# --------------------------------------------------------------------------
+# paid-call accounting
+#
+# The harness tracked tokens meticulously for the free local tiers and not at
+# all for the API calls that cost money, so pricing a run meant estimating from
+# character counts after the fact. These tests cover the accounting and the two
+# things it is easy to get wrong: hidden thinking tokens, and pricing the judge
+# at the reference model's rate.
+# --------------------------------------------------------------------------
+
+
+class _FakeCompletion:
+    def __init__(self, tokens_in, tokens_out, usage=None):
+        self.tokens_in = tokens_in
+        self.tokens_out = tokens_out
+        self.raw = {"usage": usage or {}}
+
+
+def test_usage_keeps_the_providers_own_block():
+    """Named fields would drop whatever a provider reports beyond the standard
+    two — which is exactly where the billed-but-invisible tokens live."""
+    from eval.run_eval import usage_of
+
+    u = usage_of("judge", "gemini-2.5-flash", _FakeCompletion(
+        100, 8, {"prompt_tokens": 100, "completion_tokens": 8, "total_tokens": 108,
+                 "completion_tokens_details": {"reasoning_tokens": 412}}))
+    assert (u.tokens_in, u.tokens_out) == (100, 8)
+    assert u.detail["completion_tokens_details"]["reasoning_tokens"] == 412
+    # The two standard counts are already first-class; keeping them in `detail`
+    # too would double-count them in any sum over the block.
+    assert "prompt_tokens" not in u.detail
+    assert "completion_tokens" not in u.detail
+
+
+@pytest.mark.parametrize("usage,expected", [
+    ({"completion_tokens_details": {"reasoning_tokens": 412}}, 412),   # Gemini/OpenAI
+    ({"thoughts_token_count": 77}, 77),                                # Gemini native
+    ({"usageMetadata": {"thoughts_token_count": 5}}, 5),               # nested deeper
+    ({}, 0),
+    ({"completion_tokens_details": {"reasoning_tokens": 0}}, 0),
+])
+def test_thinking_tokens_are_found_wherever_the_provider_hid_them(usage, expected):
+    """This project has already lost a run to hidden thinking: the judge was
+    called with max_tokens=10, thinking ate the whole budget, and every verdict
+    came back empty. Finding them is how the cost report can say so."""
+    from eval.run_eval import thinking_tokens, usage_of
+
+    assert thinking_tokens(usage_of("judge", "m", _FakeCompletion(1, 1, usage))) == expected
+
+
+def test_cost_report_prices_the_judge_separately_from_the_reference():
+    """The judge is deliberately a different model (D11), so it has different
+    rates. One price for both is simply a wrong number."""
+    from decimal import Decimal
+
+    from eval.run_eval import ApiUsage, PromptResult, cost_report
+
+    r = PromptResult(id="x", category="c", grade_mode="judge", prompt="p")
+    r.usage = [ApiUsage("reference", "big", 1_000_000, 1_000_000),
+               ApiUsage("judge", "small", 1_000_000, 1_000_000)]
+    out = cost_report({"x": r}, prices={
+        "reference": (Decimal("2.00"), Decimal("10.00")),
+        "judge": (Decimal("0.30"), Decimal("2.50")),
+    })
+    assert "$12.0000" in out          # reference: 2 + 10
+    assert "$2.8000" in out           # judge:     0.30 + 2.50
+    assert "$14.8000" in out          # and the total is their sum
+
+
+def test_cost_report_gives_a_range_when_no_total_settles_it():
+    """A named `reasoning_tokens` with no `total_tokens` is genuinely
+    ambiguous: OpenAI counts it inside `completion_tokens`, others do not.
+    Picking one and being quietly wrong by 2x is worse than showing both."""
+    from decimal import Decimal
+
+    from eval.run_eval import ApiUsage, PromptResult, cost_report
+
+    r = PromptResult(id="x", category="c", grade_mode="judge", prompt="p")
+    r.usage = [ApiUsage("judge", "m", 0, 1_000_000,
+                        {"completion_tokens_details": {"reasoning_tokens": 1_000_000}})]
+    out = cost_report({"x": r}, prices={"judge": (Decimal("0"), Decimal("10.00"))})
+    assert "$10.0000 to $20.0000" in out
+    assert "thinking 1,000,000" in out
+
+
+def test_a_total_tokens_gap_is_charged_exactly():
+    """The shape Gemini's OpenAI layer actually returns, measured 2026-07-29:
+    no `reasoning_tokens` key anywhere, thinking visible only as the gap in
+    `total_tokens`. Billing on `completion_tokens` alone understates it, and
+    nothing in the response says so."""
+    from decimal import Decimal
+
+    from eval.run_eval import (
+        ApiUsage,
+        PromptResult,
+        billable_out,
+        cost_report,
+        thinking_tokens,
+    )
+
+    u = ApiUsage("judge", "gemini-2.5-flash", 9, 2, tokens_total=34)
+    assert thinking_tokens(u) == 23, "9 + 2 + 23 = 34"
+    assert billable_out(u) == 25, "the 23 hidden tokens are billed as output"
+
+    r = PromptResult(id="x", category="c", grade_mode="judge", prompt="p")
+    r.usage = [ApiUsage("judge", "m", 0, 1_000_000, tokens_total=2_000_000)]
+    out = cost_report({"x": r}, prices={"judge": (Decimal("0"), Decimal("10.00"))})
+    assert "$20.0000" in out and " to " not in out, "a total makes it exact, not a range"
+
+
+def test_reasoning_effort_none_leaves_no_gap_to_charge():
+    """The measured effect of turning thinking off: prompt + completion ==
+    total exactly, so there is nothing hidden and nothing to estimate."""
+    from eval.run_eval import ApiUsage, billable_out, thinking_tokens
+
+    u = ApiUsage("judge", "gemini-2.5-flash", 9, 2, tokens_total=11)
+    assert thinking_tokens(u) == 0
+    assert billable_out(u) == 2
+
+
+def test_cost_report_says_so_rather_than_reporting_zero():
+    """A run cached before accounting existed cost money; reporting $0.00 for
+    it would be a confident lie."""
+    from eval.run_eval import PromptResult, cost_report
+
+    r = PromptResult(id="x", category="c", grade_mode="judge", prompt="p")
+    assert "no paid-call usage recorded" in cost_report({"x": r}, prices={})
+
+
+def test_usage_survives_a_cache_round_trip(tmp_path, monkeypatch):
+    from eval import run_eval as ev
+
+    monkeypatch.setattr(ev, "RUNS_DIR", tmp_path)
+    r = ev.PromptResult(id="x", category="c", grade_mode="judge", prompt="p")
+    r.usage = [ev.ApiUsage("judge", "m", 3, 4, {"completion_tokens_details":
+                                                {"reasoning_tokens": 9}})]
+    ev.save_cached("t", {"x": r})
+    back = ev.load_cached("t")["x"].usage
+    assert [(u.kind, u.tokens_in, u.tokens_out) for u in back] == [("judge", 3, 4)]
+    assert ev.thinking_tokens(back[0]) == 9
+
+
+def test_a_cache_without_usage_still_loads(tmp_path, monkeypatch):
+    """Every run collected before this existed."""
+    import json
+
+    from eval import run_eval as ev
+
+    monkeypatch.setattr(ev, "RUNS_DIR", tmp_path)
+    (tmp_path / "old.json").write_text(json.dumps({
+        "x": {"id": "x", "category": "c", "grade_mode": "auto", "prompt": "p",
+              "tiers": {}, "reference": "", "labels": {}, "label_source": {},
+              "label_reason": {}}}))
+    assert ev.load_cached("old")["x"].usage == []
+
+
+# --------------------------------------------------------------------------
+# token budget
+# --------------------------------------------------------------------------
+
+
+def _cached_at(budget):
+    from eval.run_eval import PromptResult, TierResult
+
+    r = PromptResult(id="x", category="c", grade_mode="auto", prompt="p")
+    r.tiers["local_small"] = TierResult("local_small", "m", "answer", {"n_tokens": 5},
+                                        1, 5, 1.0, max_tokens=budget)
+    return {"x": r}
+
+
+def test_resuming_across_a_budget_change_is_refused():
+    """`n_tokens` is a calibrator feature, so a cache mixing two budgets fits a
+    distribution no configuration ever produced — and both halves look like
+    valid rows, so nothing downstream can notice."""
+    from eval.run_eval import BudgetMismatch, check_budget
+
+    with pytest.raises(BudgetMismatch) as exc:
+        check_budget(_cached_at(120), 512, "full")
+    assert "120" in str(exc.value) and "512" in str(exc.value)
+    assert "rm eval/runs/full.json" in str(exc.value), "it must say how to proceed"
+
+
+def test_a_matching_budget_resumes_normally():
+    from eval.run_eval import check_budget
+
+    check_budget(_cached_at(512), 512, "full")
+
+
+def test_a_cache_predating_the_field_is_unknown_not_mismatched():
+    """Refusing to load every historical run would be worse than saying so."""
+    from eval.run_eval import check_budget
+
+    check_budget(_cached_at(0), 512, "full")
+
+
+def test_the_eval_calibrates_at_the_length_production_serves():
+    """The default used to be 120 while the gateway served 512, so the
+    calibrator was fitted to answers a quarter the length of the ones it would
+    score — and the judge compared those against full-length references."""
+    from app.config import Settings
+    from eval.run_eval import build_parser
+
+    parser = build_parser()
+    assert parser.parse_args([]).max_tokens == 0, "0 means 'take the setting'"
+    # The resolution `main` performs. 512, not the old hardcoded 120.
+    resolved = parser.parse_args([]).max_tokens or Settings().default_max_tokens
+    assert resolved == Settings().default_max_tokens == 512
+    assert parser.parse_args(["--max-tokens", "64"]).max_tokens == 64, "still overridable"
+
+
+async def test_the_paid_path_records_what_it_spent(tmp_path, monkeypatch):
+    """End-to-end through the real `collect`, with the providers stubbed.
+
+    The unit tests above cover the accounting functions; this covers the wiring
+    to them. Both call sites — reference and judge — have to append usage, and
+    a missed one shows up here as a short list rather than as a plausible-
+    looking total that is quietly missing a third of the calls.
+    """
+    from app.providers.base import Completion
+    from eval import run_eval as ev
+    from eval.dataset import DATASET
+
+    monkeypatch.setattr(ev, "RUNS_DIR", tmp_path)
+
+    class FakeOllama:
+        def __init__(self, client): pass
+        async def chat(self, **kw):
+            return Completion(content="a local answer", model=kw["model"],
+                              tokens_in=5, tokens_out=3,
+                              logprobs=[{"logprob": -0.2}] * 3)
+
+    class FakeApi:
+        def __init__(self, reply): self.reply, self.calls = reply, 0
+        async def chat(self, **kw):
+            self.calls += 1
+            return Completion(
+                content=self.reply, model=kw["model"], tokens_in=200, tokens_out=9,
+                raw={"usage": {"prompt_tokens": 200, "completion_tokens": 9,
+                               "completion_tokens_details": {"reasoning_tokens": 40}}})
+
+    monkeypatch.setattr(ev, "OllamaProvider", FakeOllama)
+    frontier, judge = FakeApi("the reference answer"), FakeApi("ACCEPTABLE")
+    prompt = next(p for p in DATASET if p.grade != "auto")
+
+    results = await ev.collect(
+        [prompt], tag="t", small_model="s", large_model="l", max_tokens=512,
+        use_real_frontier=True, frontier=frontier, judge=judge,
+        judge_model="judge-m", frontier_model="ref-m")
+
+    r = results[prompt.id]
+    assert r.labels == {"local_small": True, "local_large": True}
+    # 1 reference + 1 judge per local tier. A missing call site shows up here.
+    assert [u.kind for u in r.usage] == ["reference", "judge", "judge"]
+    assert frontier.calls == 1 and judge.calls == 2
+    assert all(ev.thinking_tokens(u) == 40 for u in r.usage)
+
+    from decimal import Decimal
+    out = ev.cost_report(results, prices={
+        "reference": (Decimal("2.50"), Decimal("10.00")),
+        "judge": (Decimal("0.30"), Decimal("2.50"))})
+    assert "reference" in out and "judge" in out and "thinking" in out
+    # And it survives the round trip the checkpoint performs after every prompt.
+    assert [u.kind for u in ev.load_cached("t")[prompt.id].usage] == \
+        ["reference", "judge", "judge"]
+
+
+# --------------------------------------------------------------------------
+# reasoning_effort passthrough
+# --------------------------------------------------------------------------
+
+
+def _capture_post(monkeypatch):
+    """A FrontierProvider whose POST body we can inspect."""
+
+    from app.providers.frontier import FrontierProvider
+
+    sent = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+        def json(self):
+            return {"choices": [{"message": {"content": "ACCEPTABLE"},
+                                 "finish_reason": "stop"}],
+                    "model": "m", "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+
+    class FakeClient:
+        async def post(self, url, **kw):
+            sent.update(kw.get("json") or {})
+            return FakeResponse()
+
+    return FrontierProvider(FakeClient(), base_url="https://x/v1", api_key="k"), sent
+
+
+async def test_reasoning_effort_is_sent_when_set(monkeypatch):
+    provider, sent = _capture_post(monkeypatch)
+    await provider.chat(model="gemini-2.5-flash", messages=[{"role": "user", "content": "q"}],
+                        reasoning_effort="none")
+    assert sent["reasoning_effort"] == "none"
+
+
+async def test_reasoning_effort_is_absent_when_unset(monkeypatch):
+    """The field is standard; its accepted values are not. Anthropic — this
+    project's default judge — does not use it, so sending it unconditionally
+    would 400 against the documented configuration."""
+    provider, sent = _capture_post(monkeypatch)
+    await provider.chat(model="claude-sonnet-5", messages=[{"role": "user", "content": "q"}])
+    assert "reasoning_effort" not in sent
+
+
+async def test_a_rejected_reasoning_effort_says_what_to_do(monkeypatch):
+    """Which values a model accepts varies per model within one provider, so
+    this 400 arrives mid-run with an opaque body."""
+
+    from app.providers.base import ProviderUnavailable
+    from app.providers.frontier import FrontierProvider
+
+    class Rejecting:
+        status_code = 400
+        text = '{"error": {"message": "reasoning_effort not supported"}}'
+        def json(self):
+            return {"error": {"message": "reasoning_effort not supported"}}
+
+    class FakeClient:
+        async def post(self, url, **kw):
+            return Rejecting()
+
+    provider = FrontierProvider(FakeClient(), base_url="https://x/v1", api_key="k")
+    with pytest.raises(ProviderUnavailable) as exc:
+        await provider.chat(model="gemini-3-flash-preview",
+                            messages=[{"role": "user", "content": "q"}],
+                            reasoning_effort="none")
+    assert "none" in exc.value.fix and "gemini-2.5-flash" in exc.value.fix
+
+
+async def test_the_eval_passes_reasoning_effort_to_the_judge_only_when_configured(
+        tmp_path, monkeypatch):
+    """Wiring, not just capability — the setting has to reach the call."""
+    from app.providers.base import Completion
+    from eval import run_eval as ev
+    from eval.dataset import DATASET
+
+    monkeypatch.setattr(ev, "RUNS_DIR", tmp_path)
+
+    class FakeOllama:
+        def __init__(self, client): pass
+        async def chat(self, **kw):
+            return Completion(content="a", model="m", tokens_in=1, tokens_out=1,
+                              logprobs=[{"logprob": -0.2}])
+
+    class Recorder:
+        def __init__(self, reply): self.reply, self.efforts = reply, []
+        async def chat(self, **kw):
+            self.efforts.append(kw.get("reasoning_effort"))
+            return Completion(content=self.reply, model="m", tokens_in=1, tokens_out=1,
+                              raw={"usage": {}})
+
+    monkeypatch.setattr(ev, "OllamaProvider", FakeOllama)
+    frontier, judge = Recorder("ref"), Recorder("ACCEPTABLE")
+    p = next(x for x in DATASET if x.grade != "auto")
+    await ev.collect([p], tag="t", small_model="s", large_model="l", max_tokens=512,
+                     use_real_frontier=True, frontier=frontier, judge=judge,
+                     judge_model="j", frontier_model="f",
+                     judge_reasoning_effort="none")
+
+    assert judge.efforts == ["none", "none"], "the judge must get it"
+    assert frontier.efforts == [""], "the reference must not — it is the gold standard"

@@ -121,6 +121,32 @@ class Settings(BaseSettings):
     # through a limit is slower and ruder than staying under it. 3.5s paces
     # ~17/min, comfortably inside a 20/min window.
     eval_min_call_interval_s: float = 0.0
+    # The judge's prices, per million tokens. Separate from FRONTIER_PRICE_*
+    # because the judge is deliberately a different model from the one being
+    # judged (D11), and a different model has different rates — pricing 86
+    # judge calls at the reference model's rate is simply a wrong number.
+    #
+    # Like FRONTIER_PRICE_*, these are placeholders. Verify them against the
+    # provider's current rates before believing any total.
+    eval_judge_price_in: Decimal = Decimal("2.50")
+    eval_judge_price_out: Decimal = Decimal("10.00")
+    # OpenAI's `reasoning_effort`, passed through when non-empty.
+    #
+    # Empty by default and it must stay that way: the field is standard but its
+    # accepted *values* are not. "none" disables thinking on gemini-2.5-flash;
+    # Gemini 3 removed the off switch entirely (floor is "low"); Anthropic —
+    # the default judge here — does not use the field at all. A non-empty
+    # default would 400 against this project's own documented judge.
+    #
+    # Worth setting to "none" for a Gemini 2.5 judge. The judge emits one word
+    # against a rubric, so thinking buys little, and it is what broke the run
+    # at EVAL_JUDGE_MAX_TOKENS=10: hidden thinking ate the whole budget and
+    # every verdict came back empty. Off, that failure mode cannot recur.
+    eval_judge_reasoning_effort: str = ""
+    # The reference is the gold standard every label is graded against, so
+    # think twice before turning its thinking down to save pennies. Gemini 3
+    # cannot disable it anyway.
+    eval_reference_reasoning_effort: str = ""
 
     # ---- Security --------------------------------------------------------
     # Comma-separated. Empty means the gateway runs OPEN, which is only
