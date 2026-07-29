@@ -124,6 +124,29 @@ daily cap is a daily question and the rest of `/metrics` is all-time:
                                "remaining_usd": 0.0, "enforced": true}}}
 ```
 
+#### The gateway's own ceiling
+
+Separate from tenant budgets, and **armed by default** at `MAX_DAILY_SPEND_USD=10.00`.
+
+Invariant 4 says *"Ollama down → escalate everything"*, which keeps the gateway
+answering and, at the shipped rate limit, spends roughly **$138/day per client**
+while doing it. Tenant budgets can bound that but are opt-in, so before this the
+protection existed and was not armed. A business policy may default to off; a
+safety limit may not.
+
+It outranks a tenant's own allowance — an operator limit is not something a
+caller can be *within* — so a tenant with headroom is still refused, and
+`x_hlr.budget` keeps reporting their true position while `degraded` carries
+`spend_ceiling_reached`.
+
+When it binds, requests degrade to the local tiers exactly as a tenant budget
+does. If the local tiers are also down — the usual reason it binds at all —
+there is nothing cheaper to fall back to and the request gets a **503**, not a
+402: the caller's account is fine and they can do nothing about it.
+
+`/metrics` reports it under the reserved `__all__` bucket, alongside the
+tenants, so gateway-wide spend is never mistaken for an account's.
+
 ### Audit trail
 
 Every request writes one JSON line to `AUDIT_PATH`, **including refusals** — a
@@ -548,6 +571,7 @@ Invariant 1.
 | 413 | `too_many_messages` | More than `MAX_MESSAGES` |
 | 402 | `budget_exhausted` | Tenant over their daily cap **and** the caller pinned `gateway:frontier`. Without the pin, the request is served locally instead |
 | 429 | `rate_limited` | Window exhausted. Carries `Retry-After` |
+| 503 | `spend_ceiling_reached` | `MAX_DAILY_SPEND_USD` exhausted **and** no local tier could serve. Not 402 — the caller's account is fine and they can do nothing about it |
 | 503 | `all_tiers_down` | No tier is reachable |
 | 504 | `upstream_timeout` | Every tier exceeded its timeout |
 

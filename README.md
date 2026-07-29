@@ -5,7 +5,7 @@ the cheapest one that will actually do the job.
 
 > **Status: M0–M13 complete. The gateway runs, and it's hardened.**
 > All five tiers, both confidence gates, the eval harness and the dashboard are built and working —
-> **709 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
+> **718 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
 > rate
 > limiting, per-tenant budgets, a durable audit trail, circuit breakers, structured
 > logging and a container image are in. Run
@@ -359,6 +359,20 @@ logs the number. **If Redis is down, budgets aren't enforced** — failing close
 blip into a total frontier outage, so it fails open and says so in four places
 ([D24](docs/DECISIONS.md), [D25](docs/DECISIONS.md)).
 
+**The gateway also caps itself.** `MAX_DAILY_SPEND_USD` (default **$10**) bounds spend across every
+tenant, and unlike the per-tenant budgets it ships *armed*. It exists because invariant 4 — *"Ollama
+down → escalate everything"* — is correct for availability and costs about **$138/day per client** at
+the shipped rate limit. A business policy may default to off; a safety limit may not
+([D27](docs/DECISIONS.md)).
+
+Measured, with Ollama pointed at a dead port and the ceiling set to $0.0006:
+
+```
+req 1-3   200  tier=frontier          (invariant 4, working as designed)
+req 4-5   503  spend_ceiling_reached  (bounded)
+spent     $0.000624 against a $0.0006 ceiling — one request's overshoot
+```
+
 ### Audit trail
 
 One JSON line per request in `AUDIT_PATH`, **including refusals**, durable across restarts:
@@ -432,7 +446,7 @@ from exactly-summed integer token counters.
 ## How it's tested
 
 ```bash
-.venv/bin/python -m pytest -m "not integration"   # 709, hermetic — needs nothing running
+.venv/bin/python -m pytest -m "not integration"   # 718, hermetic — needs nothing running
 .venv/bin/ruff check app eval scripts mock_frontier tests
 .venv/bin/python scripts/check_docs.py            # 133 cross-document checks
 ```
@@ -443,7 +457,7 @@ suite had caught **one of fourteen**.
 
 | Layer | Catches | Blind to |
 |---|---|---|
-| **Unit** (709) | logic inside a module | whether modules are connected |
+| **Unit** (718) | logic inside a module | whether modules are connected |
 | **Wiring** | components not plugged in; settings wired to nothing | anything the real lifespan can't reach |
 | **Rendering** | dashboard JS that doesn't parse, run, or match the DOM | visual layout |
 | **Doc checks** (133) | docs contradicting the code | whether the code is right |
@@ -491,7 +505,7 @@ assumption everything else rests on, before anything is built on top of it.
 
 ```
 $ .venv/bin/python -m pytest -q -m "not integration"
-709 passed, 10 deselected in 4.9s
+718 passed, 10 deselected in 4.7s
 
 $ .venv/bin/python scripts/preflight.py
   ✓ python 3.14.6   ✓ venv   ✓ disk 34.1 GB free   ! swap 87%

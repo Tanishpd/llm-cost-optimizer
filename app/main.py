@@ -28,7 +28,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from redis.asyncio import Redis
 
 from app.audit import AuditLog, audit_entry
-from app.budgets import BudgetLedger, TenantRegistry, max_overshoot_micro
+from app.budgets import (
+    BudgetLedger,
+    TenantRegistry,
+    max_overshoot_micro,
+)
 from app.cache import guards
 from app.cache.exact import CachedAnswer, ExactCache
 from app.cache.keys import build_key
@@ -123,7 +127,8 @@ async def lifespan(app: FastAPI):
         settings.tenant_list(),
         default_daily_budget_usd=settings.default_daily_budget_usd,
     )
-    app.state.budgets = BudgetLedger(redis, app.state.tenants)
+    app.state.budgets = BudgetLedger(
+        redis, app.state.tenants, max_daily_spend_usd=settings.max_daily_spend_usd)
     app.state.auth = ApiKeyAuth(
         settings.api_key_set,
         require_auth=settings.require_auth,
@@ -407,11 +412,28 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
     # expensive model", refusing service when the expensive model is
     # unaffordable would be exactly the wrong instinct.
     tenant_name = getattr(request.state, "tenant", "anonymous")
-    verdict = await request.app.state.budgets.check(tenant_name)
-    budget_record = BudgetRecord(**verdict.as_dict())
-    if verdict.unavailable and verdict.limit_micro > 0:
+    ledger = request.app.state.budgets
+
+    # The gateway's own ceiling first: an operator limit is not something a
+    # caller can be "within", so it outranks the tenant's own allowance. When
+    # it binds, the tenant's remaining budget is irrelevant and reporting it
+    # would be misleading.
+    ceiling = await ledger.check_global()
+    verdict = ceiling if not ceiling.allowed else await ledger.check(tenant_name)
+
+    # Always report the tenant's own position, whichever verdict is governing —
+    # "who am I and what have I spent" is a different question from "why was I
+    # refused", and collapsing them would hide one behind the other.
+    tenant_view = await ledger.check(tenant_name)
+    budget_record = BudgetRecord(**tenant_view.as_dict())
+
+    if (ceiling.unavailable and ceiling.limit_micro > 0) or (
+        tenant_view.unavailable and tenant_view.limit_micro > 0
+    ):
         degraded.append("budget_unavailable")
-    if not verdict.allowed:
+    if not ceiling.allowed:
+        degraded.append("spend_ceiling_reached")
+    elif not verdict.allowed:
         degraded.append(f"budget_exhausted:{verdict.tenant}")
 
     limits: RequestLimits = request.app.state.limits
@@ -657,10 +679,13 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
         # and it takes the caller removing the fallback themselves.
         if body.forced_tier == "frontier":
             latency["total"] = round((time.perf_counter() - started) * 1000, 1)
+            # 503, not 402, when the *gateway's* ceiling is what bound: the
+            # caller's account is fine and they can do nothing about it, so
+            # billing them for the refusal would be the wrong story.
             return _error(
-                status=402,
-                code="budget_exhausted",
-                error_type="budget_error",
+                status=503 if not ceiling.allowed else 402,
+                code="spend_ceiling_reached" if not ceiling.allowed else "budget_exhausted",
+                error_type="upstream_unavailable" if not ceiling.allowed else "budget_error",
                 message=(
                     f"{verdict.reason}. The frontier tier was pinned explicitly via "
                     "`model`, so there is no cheaper tier to fall back to. Drop the pin "
@@ -670,7 +695,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
                 degraded=degraded,
                 started=started,
                 request=request,
-                tenant=verdict.tenant,
+                tenant=tenant_name,
             )
         tiers = [t for t in tiers if not t.billed]
         # The router may have chosen `frontier`; `entry_index` returns 0 for a
@@ -718,7 +743,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
             started=started,
             path=list(outcome.path),
             request=request,
-            tenant=verdict.tenant,
+            tenant=tenant_name,
         )
 
     completion = outcome.completion
@@ -737,7 +762,11 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
     # the provider replies. That is what bounds a tenant's overshoot to one
     # request; `budgets.max_overshoot_micro` puts a number on it.
     if cost.cost_micro_usd > 0:
-        await request.app.state.budgets.record(verdict.tenant, cost.cost_micro_usd)
+        # `tenant_name`, never `verdict.tenant`: when the gateway ceiling is
+        # what bound, `verdict` describes the `__all__` pseudo-bucket, and
+        # recording against that would both mis-attribute the spend and
+        # double-count it (record() already increments the global counter).
+        await request.app.state.budgets.record(tenant_name, cost.cost_micro_usd)
 
     # ---- write-through --------------------------------------------------
     # Every served answer is cached, so the next identical request is a T0 hit.
@@ -802,7 +831,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
         # Re-read after recording, so `remaining` reflects this request rather
         # than the state before it. Cheap: one GET, and only when a cap exists.
         budget=BudgetRecord(**(
-            await request.app.state.budgets.check(verdict.tenant)
+            await request.app.state.budgets.check(tenant_name)
         ).as_dict()),
         degraded=degraded,
         **cost.as_dict(),
@@ -832,7 +861,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
             degraded=degraded,
             created_at=time.time(),
         ),
-        tenant=verdict.tenant,
+        tenant=tenant_name,
         model=completion.model,
     )
 

@@ -119,6 +119,14 @@ There the argument is: escalating from gate 1 costs ~450 ms and no money, so gat
 readily. Escalating from gate 2 costs real money, so it accepts at `TARGET_LARGE=0.85`, the spec's
 number, on the gate that actually spends. **Gate 1's bar is higher than gate 2's, not lower.**
 
+**The safety behaviour is the expensive behaviour.** Invariant 4 sends everything to the frontier
+when Ollama dies — right for availability, ~$138/day per client at the shipped rate limit.
+`MAX_DAILY_SPEND_USD` bounds it and **ships armed** ($10), unlike per-tenant budgets which default to
+unlimited. Do not "fix" that inconsistency by disarming it: a business policy may default to off, a
+safety limit may not (D27). Note `verdict.tenant` is the pseudo-bucket `__all__` when the ceiling
+binds — attribute spend with `tenant_name`, never `verdict.tenant`, or it lands on a fake account and
+double-counts.
+
 **Sampling defaults live in two endpoints and must not drift.** `DEFAULT_TEMPERATURE`
 and `DEFAULT_MAX_TOKENS` are operator policy applied by `_apply_sampling_defaults`, which
 **both** `/v1/chat/completions` and `/route` call. They must: temperature and max_tokens are
@@ -272,7 +280,7 @@ which is worse than shared but far better than none.
 
 **M0–M13 complete (2026-07-28).** The gateway runs and is hardened: all five tiers, both gates, eval
 harness, dashboard, auth, shared rate limiting, circuit breakers, structured logging, container
-image, streaming, per-tenant budgets, a durable audit trail. **709 unit + 10 integration
+image, streaming, per-tenant budgets, a durable audit trail. **718 unit + 10 integration
 tests** at 96% coverage, 133 doc-consistency checks. `python3 scripts/demo.py`
 walks every tier.
 
