@@ -37,14 +37,38 @@ _LABEL_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 PREFIX = "hlr"
 
 
+# Every control character except tab and line feed — LF has a defined escape,
+# tab is harmless inside a quoted value, and everything else is either an
+# accident or an injection.
+#
+# The range is wider than C0 on purpose. Python's `str.splitlines()` — and
+# several exposition parsers — break on \v \f \x1c \x1d \x1e \x85 \u2028 and
+# \u2029 as well as \r\n. Property testing found \r first and then \x85 (NEL,
+# a C1 control) after the first fix, which is the argument for enumerating the
+# whole class rather than the character that happened to fail.
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029]")
+
+
 def escape_label_value(value: str) -> str:
-    """Backslash, double-quote and newline are the three that break the format."""
-    return (
+    """Make an arbitrary string safe to sit inside `label="..."`.
+
+    The exposition format defines exactly three escapes — backslash,
+    double-quote and line feed — so those are escaped. Every *other* control
+    character is replaced, not escaped, because there is no defined sequence
+    for them and emitting one raw is how a single sample becomes two lines.
+
+    Found by property testing: a lone `\r` in a tenant name split the sample
+    across two lines, producing `hlr_thing{label="` and `"} 1` — two fragments,
+    neither of which parses. Tenant names come from operator JSON and tier
+    names from config; neither is guaranteed tame.
+    """
+    escaped = (
         str(value)
         .replace("\\", "\\\\")
         .replace('"', '\\"')
         .replace("\n", "\\n")
     )
+    return _CONTROL_RE.sub("\ufffd", escaped)
 
 
 def _format_value(value: float | int) -> str:

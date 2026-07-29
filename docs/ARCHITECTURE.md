@@ -304,15 +304,16 @@ actually found, and noticing that the unit suite caught one of fourteen.
 
 | Layer | Command | Catches | Blind to |
 |---|---|---|---|
-| **Unit** (799, hermetic) | `pytest -m "not integration"` | Logic inside a module | Whether modules are connected |
+| **Unit** (823, hermetic) | `pytest -m "not integration"` | Logic inside a module | Whether modules are connected |
 | **Wiring** | `tests/test_wiring.py` | Components not plugged in; settings wired to nothing | Anything the real lifespan cannot reach |
 | **Rendering** | `tests/test_dashboard.py` | JS that does not parse, run, or match the DOM | Visual layout — a bar can be the wrong width and still render |
-| **Doc consistency** (175) | `scripts/check_docs.py` | Docs contradicting the code | Whether the code is right |
+| **Doc consistency** (179) | `scripts/check_docs.py` | Docs contradicting the code | Whether the code is right |
 | **Integration** (10) | `pytest -m integration` | Real models, real Redis, the real OpenAI SDK | Anything needing sustained load |
 | **Load** | `scripts/loadtest.py` | Cost identities under concurrency, duplicate model calls | Correctness of a single request |
 | **Soak** | `scripts/soak.py` | Memory/fd growth, latency drift, counter divergence over time | Anything faster than one sampling window |
 | **Multi-worker** | `scripts/multiworker_check.py` | State that stopped being shared across processes | Single-process logic |
 | **Mutation** | `scripts/mutation.sh` | Assertions that would not fail if the code were wrong | Anything outside the pure modules |
+| **Property** | `tests/test_properties.py` | Inputs nobody thought of, over the pure functions | Anything stateful |
 
 Two properties are worth naming because they are easy to lose:
 
@@ -340,8 +341,11 @@ against four real processes. It is written to fail when state stops being
 fine in each worker separately, and the only symptom is a limit multiplied by
 the worker count.
 
-**What is still not tested.** No property-based testing (`hypothesis`) over the
-pure functions.
+**The mathematical claims are quantified, not illustrated.**
+`tests/test_properties.py` asserts `geo_mean`'s length invariance — the property
+D3 rests on — over generated inputs, and asserts that
+`sequence_probability` really does decay, because a counter-example that
+stopped behaving as described would quietly stop making its point.
 
 ## 10. Extension seams
 

@@ -198,6 +198,7 @@ every judgment call toward missing.
 | Prove the dashboard still works | `tests/test_dashboard.py` — parses *and executes* its JS |
 | Prove a new setting does something | `tests/test_wiring.py` — every knob is tested or declared inert |
 | Prove it survives load | `scripts/loadtest.py` — asserts cost identities, not just latency |
+| Prove a claim holds for all inputs | `tests/test_properties.py` — geo_mean's length invariance lives here |
 | Prove the tests would catch a bug | `scripts/mutation.sh` — baseline 19 survivors, all prose or equivalent |
 | Prove shared state is shared | `scripts/multiworker_check.py` — runs in CI on 4 workers |
 | Prove it survives *time* | `scripts/soak.py` — memory, fds, latency drift; distinguishes a leak from a step |
@@ -285,10 +286,10 @@ which is worse than shared but far better than none.
 
 ## Current state
 
-**M0–M19 complete (2026-07-29).** The gateway runs and is hardened: all five tiers, both gates, eval
+**M0–M20 complete (2026-07-29).** The gateway runs and is hardened: all five tiers, both gates, eval
 harness, dashboard, auth, shared rate limiting, circuit breakers, structured logging, container
-image, streaming, per-tenant budgets, a durable audit trail. **799 unit + 10 integration
-tests** at 96% coverage, 175 doc-consistency checks. `python3 scripts/demo.py`
+image, streaming, per-tenant budgets, a durable audit trail. **823 unit + 10 integration
+tests** at 96% coverage, 179 doc-consistency checks. `python3 scripts/demo.py`
 walks every tier.
 
 **Shipping in `raw` confidence mode, not `calibrated`** — M6 fitted both calibrators and gate
