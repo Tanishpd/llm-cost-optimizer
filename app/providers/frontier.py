@@ -13,6 +13,7 @@ anything ever asked.
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
@@ -94,9 +95,20 @@ class FrontierProvider:
             # Discarding it cost one eval run ~15 minutes on a single call
             # (30+60+120+240+480s) before giving up on a limit that clears in
             # under a minute.
-            detail = response.text[:300].replace("\n", " ").strip()
+            # Search the WHOLE body for the delay, then lead with it.
+            #
+            # Truncating first does not work: Gemini puts ~430 characters of
+            # quota boilerplate and documentation links before "Please retry in
+            # 23.7s", so a 300-character clip cuts off the one field a caller
+            # needs. Found the hard way — the truncated version still produced
+            # blind exponential backoff and killed a run at the same prompt
+            # twice.
+            body = response.text
+            hint = re.search(r"retry in ([\d.]+)s", body)
+            lead = f"retry in {hint.group(1)}s — " if hint else ""
             raise ProviderUnavailable(
-                f"frontier rate-limited the request (429): {detail}",
+                f"frontier rate-limited the request (429): {lead}"
+                f"{body[:200].replace(chr(10), ' ').strip()}",
                 fix="Back off and retry",
             )
         if response.status_code >= 400:

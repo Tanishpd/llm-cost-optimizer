@@ -321,6 +321,10 @@ async def main() -> int:
     parser.add_argument("--limit", type=int, default=0, help="only run the first N prompts")
     parser.add_argument("--max-tokens", type=int, default=120)
     parser.add_argument("--tag", default="", help="run cache name (default: auto or full)")
+    parser.add_argument("--fit-only", action="store_true",
+                        help="fit from the existing run cache without collecting "
+                             "anything new — for when a provider's quota ran out "
+                             "mid-run and the partial data is worth fitting")
     parser.add_argument("--only-judged", action="store_true",
                         help="only the prompts that need the real API — the path "
                              "--limit cannot reach, since the dataset starts with "
@@ -338,6 +342,11 @@ async def main() -> int:
     tag = args.tag or ("full" if use_real else "auto")
 
     prompts = DATASET if use_real else [p for p in DATASET if p.grade == "auto"]
+    if args.fit_only:
+        # Only what is already cached. No provider is contacted, so this is
+        # free and cannot fail on a quota.
+        have = set(load_cached(args.tag or ("full" if use_real else "auto")))
+        prompts = [p for p in prompts if p.id in have]
     if args.only_judged:
         prompts = [p for p in prompts if p.grade != "auto"]
     if args.limit:
@@ -350,7 +359,7 @@ async def main() -> int:
 
     frontier = judge = None
     client = None
-    if use_real:
+    if use_real and not args.fit_only:
         key = settings.frontier_api_key.get_secret_value()
         judge_key = settings.eval_judge_api_key.get_secret_value() or key
         if not key or key == "mock-key":

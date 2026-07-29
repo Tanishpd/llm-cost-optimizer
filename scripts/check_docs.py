@@ -209,9 +209,17 @@ def check_milestones_are_not_still_pending() -> None:
     corpus = "\n".join(d.read_text() for d in DOCS)
 
     for m in sorted(done):
-        for claim in (f"Next: **{m}**", f"Start at {m} in", f"| {m} | ", f"**{m}** | next"):
+        # `| M6 |` only means "a milestone table row" at the START of a line.
+        # Mid-row it is an ordinary data cell — RESEARCH.md compares runs in a
+        # table whose second column is the run name, and this check flagged it.
+        # A rule that fires on legitimate prose pushes people to distort the
+        # prose, which is worse than the drift it was guarding against.
+        for claim in (f"Next: **{m}**", f"Start at {m} in", f"**{m}** | next"):
             check(f"{m} is done and not also advertised as next ({claim!r})",
                   claim not in corpus)
+        check(f"{m} has no pending milestone-table row",
+              not re.search(rf"^\|\s*\*?\*?{m}\*?\*?\s*\|.*\b(next|todo|pending|planned)\b",
+                            corpus, re.M | re.I))
 
 
 def check_request_defaults_match_config() -> None:

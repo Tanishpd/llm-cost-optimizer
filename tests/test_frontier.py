@@ -295,3 +295,32 @@ async def test_a_429_carries_the_providers_retry_hint(mock_client):
     with pytest.raises(ProviderUnavailable) as exc:
         await provider.chat(model="m", messages=[{"role": "user", "content": "q"}])
     assert "retry in 23.7s" in str(exc.value)
+
+
+async def test_the_retry_hint_survives_a_verbose_429_body(mock_client):
+    """Gemini buries the delay after ~430 characters of boilerplate.
+
+    Clipping the body before searching it discards the one field a caller
+    needs — which is what happened, and it killed a run at the same prompt
+    twice with 15 minutes of blind backoff each time.
+    """
+    import httpx
+    import pytest
+
+    from app.providers.base import ProviderUnavailable
+
+    verbose = ("You exceeded your current quota, please check your plan and billing "
+               "details. For more information on this error, head to: "
+               "https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your "
+               "current usage, head to: https://ai.dev/rate-limit. "
+               "* Quota exceeded for metric: "
+               "generativelanguage.googleapis.com/generate_content_free_tier_requests, "
+               "limit: 20, model: gemini-3-flash\nPlease retry in 23.695367191s.")
+    assert verbose.index("Please retry in") > 300, "fixture no longer reproduces the bug"
+
+    provider = make_provider(lambda r: httpx.Response(
+        429, json={"error": {"code": 429, "message": verbose}}))
+
+    with pytest.raises(ProviderUnavailable) as exc:
+        await provider.chat(model="m", messages=[{"role": "user", "content": "q"}])
+    assert "retry in 23.695367191s" in str(exc.value)
