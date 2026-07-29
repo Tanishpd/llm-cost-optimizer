@@ -9,4 +9,4 @@ openai>=2.50.0
 
 # Coverage is not a gate (95% coverage coexisted with a dead setting and a
 # blank dashboard) but it is useful for finding untested branches.
-pytest-cov>=5.0
+pytest-cov>=7.1.0
