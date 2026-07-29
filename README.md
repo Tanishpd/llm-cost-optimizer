@@ -3,11 +3,11 @@
 An API gateway that sits in front of several models of escalating cost and decides — per request —
 the cheapest one that will actually do the job.
 
-> **Status: M0–M23 complete. The gateway runs, and it's hardened.**
+> **Status: M0–M25 complete. The gateway runs, and it's hardened.**
 > All five tiers, both confidence gates, the eval harness and the dashboard are built and working —
-> **902 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
+> **903 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
 > rate
-> limiting, per-tenant budgets, a durable audit trail, circuit breakers, structured
+> limiting, per-tenant budgets and rate limits, a durable audit trail, circuit breakers, structured
 > logging and a container image are in. Run
 > `python3 scripts/demo.py` to walk every tier in one go.
 >
@@ -15,10 +15,11 @@ the cheapest one that will actually do the job.
 > validation at n=110, and the result survives every counterfactual refit but one that strips the
 > two hardest categories at once. 0.85 is earned — [RESEARCH.md §3.7](docs/RESEARCH.md).
 >
-> The gateway still **ships in `raw` mode by default**, and that is a portability choice rather than
-> a caveat: the fitted weights describe `qwen2.5:0.5b` / `qwen2.5:3b` specifically, so a default that
-> hard-fails on any model swap would serve nobody. `CONFIDENCE_MODE=calibrated` is one line, and the
-> gateway refuses to start if the calibrator was fitted on models other than the ones configured.
+> **`calibrated` is the shipped default** as of 0.4.0, so `0.85` means what it says out of the box.
+> That works because `eval/calibrator.json` is committed and was fitted on the models this repo also
+> defaults to. **Swap `SMALL_MODEL` or `LARGE_MODEL` and the gateway refuses to start**, naming both
+> model sets — a calibrator fitted elsewhere still returns a number in [0, 1] that looks exactly like
+> a probability. Run other models with `CONFIDENCE_MODE=raw`, or refit.
 > The earlier negative result is still in [§3.4](docs/RESEARCH.md), not quietly deleted.
 
 Point any OpenAI-compatible client at it. It answers from cache when it can, tries a 0.5B model
@@ -482,7 +483,7 @@ suite had caught **one of fourteen**.
 
 | Layer | Catches | Blind to |
 |---|---|---|
-| **Unit** (902) | logic inside a module | whether modules are connected |
+| **Unit** (903) | logic inside a module | whether modules are connected |
 | **Wiring** | components not plugged in; settings wired to nothing | anything the real lifespan can't reach |
 | **Rendering** | dashboard JS that doesn't parse, run, or match the DOM | visual layout |
 | **Doc checks** (186) | docs contradicting the code | whether the code is right |
@@ -599,7 +600,9 @@ days.
 
 ### Running the calibration
 
-The one step that spends money, and the reason the gateway still ships in `raw` mode.
+The one step that spends money, and what earned `calibrated` as the shipped default. You only need
+to re-run it if you change models — the fitted calibrator is committed, and the gateway refuses to
+start if it was fitted on models other than the ones configured.
 
 Any OpenAI-compatible provider works — the eval harness sends a plain
 `POST {base_url}/chat/completions` with a bearer token, so pointing it somewhere else is config only.

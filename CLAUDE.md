@@ -88,13 +88,22 @@ modes exist for this reason: `CONFIDENCE_MODE=raw` (thresholds 0.55 / 0.62 on `g
 `CONFIDENCE_MODE=calibrated` where 0.85 genuinely means "85% chance this tier's answer is as good as
 the frontier's". Don't collapse these two modes into one.
 
-**The calibration now passes — and the shipped default is still `raw`, deliberately.** M6 failed
-(gate `large`: good ECE, no better than the base rate on Brier — calibrated without being useful,
-§3.4). The corrected real-frontier run passes both gates at n=110 and survives every counterfactual
-refit, §3.7. So 0.85 *is* earned. The default stays `raw` anyway because the fitted weights are
-specific to `qwen2.5:0.5b` / `qwen2.5:3b` on this dataset, and a default that hard-fails on any
-model change serves nobody. `CONFIDENCE_MODE=calibrated` is one line for a deployment running the
-models it was fitted on.
+**`calibrated` is the shipped default since 0.4.0.** M6 failed (gate `large`: good ECE, no better
+than the base rate on Brier — calibrated without being useful, §3.4). The corrected real-frontier run
+passes both gates at n=110 and survives every counterfactual refit, §3.7, so 0.85 is earned. It
+stayed `raw` at first on portability grounds; the provenance guard changed that, by turning a model
+mismatch into a startup refusal rather than a silent wrong number.
+
+**That default only holds because `eval/calibrator.json` is committed and was fitted on the models
+`config.py` also defaults to.** Change `SMALL_MODEL` or `LARGE_MODEL` without refitting and every
+fresh start refuses, naming both model sets. `tests/test_config_schemas.py` asserts the two agree, so
+changing one without the other fails locally rather than in someone's deployment.
+
+**Test factories must pin `confidence_mode="raw"` explicitly.** They bypass the lifespan, so they
+bypass the guard too — and `confidence.py` falls back to raw `geo_mean` when no calibrator is loaded
+while `threshold_for` returns the calibrated 0.92. Inheriting the default pointed ~900 tests at a
+configuration the gateway will not boot, and they *all still passed*, because `REAL_LOGPROBS` scores
+0.9725 and clears both 0.55 and 0.92. Green by coincidence.
 
 **A calibrator is only valid for what it was fitted on.** `calibrator.json` carries `provenance`
 (models, token budget, dataset size, judge) and the lifespan **refuses to start** in `calibrated`
@@ -320,20 +329,20 @@ which is worse than shared but far better than none.
 
 ## Current state
 
-**M0–M23 complete (2026-07-29).** The gateway runs and is hardened: all five tiers, both gates, eval
+**M0–M25 complete (2026-07-29).** The gateway runs and is hardened: all five tiers, both gates, eval
 harness, dashboard, auth, shared rate limiting, circuit breakers, structured logging, container
-image, streaming, per-tenant budgets, a durable audit trail. **902 unit + 10 integration
+image, streaming, per-tenant budgets and rate limits, a durable audit trail. **903 unit + 10 integration
 tests** at 96% coverage, 186 doc-consistency checks. `python3 scripts/demo.py`
 walks every tier.
 
-**The calibration passes. `raw` is still the shipped default.** The corrected real-frontier run
+**The calibration passes, and `calibrated` ships by default (0.4.0).** The corrected real-frontier run
 (M23) passes both gates at n=110 — `small` ECE 0.040, Brier 0.136 vs base 0.242; `large` ECE 0.027,
 Brier 0.129 vs base 0.214 — and holds under every counterfactual refit except one that strips both
 hard categories at once. `should_flip()` is `True` and **0.85 is earned**. RESEARCH.md §3.7.
 
-The default remains `raw` because the fit is specific to `qwen2.5:0.5b` / `qwen2.5:3b` on this
-dataset, not because it failed. `CONFIDENCE_MODE=calibrated` enables it; the lifespan refuses to
-start if `calibrator.json`'s recorded provenance disagrees with the configured models.
+The fit is specific to `qwen2.5:0.5b` / `qwen2.5:3b`, so the default is only safe because the
+lifespan **refuses to start** when `calibrator.json`'s provenance disagrees with the configured
+models. Running other models means `CONFIDENCE_MODE=raw`, or refitting.
 
 Measured, and now recorded in RESEARCH.md §3.1–3.2:
 

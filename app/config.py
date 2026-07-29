@@ -67,7 +67,19 @@ class Settings(BaseSettings):
     # (~200 bytes of JSON per event). 0 sends the whole answer as one chunk.
     stream_chunk_chars: int = 24
 
-    confidence_mode: Literal["raw", "calibrated"] = "raw"
+    # `calibrated` since M25, because the number finally means what it says:
+    # both gates passed validation against a real frontier at n=110 and held
+    # under every counterfactual refit (RESEARCH.md 3.7), so 0.85 is a genuine
+    # "85% chance this tier's answer is as good as the frontier's" rather than
+    # a raw geo_mean that happens to sit near it.
+    #
+    # This default only works because `eval/calibrator.json` is committed and
+    # was fitted on the models this file also defaults to. Change SMALL_MODEL
+    # or LARGE_MODEL and the gateway REFUSES TO START, naming both model sets
+    # — deliberately, since a calibrator fitted elsewhere still returns a
+    # number in [0, 1] that looks exactly like a probability. Set
+    # CONFIDENCE_MODE=raw to run other models without refitting.
+    confidence_mode: Literal["raw", "calibrated"] = "calibrated"
     # Where the fitted per-gate calibrators live. Read once at startup; missing
     # is fine in raw mode, fatal in calibrated mode (app/main.py).
     calibrator_path: str = "eval/calibrator.json"

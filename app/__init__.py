@@ -6,4 +6,4 @@ whatever a reader assumed — which is how a release ends up reporting a version
 it is not. `scripts/check_docs.py` asserts they agree.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

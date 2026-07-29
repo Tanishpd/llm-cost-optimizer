@@ -109,7 +109,19 @@ def client_factory():
         budget_redis=None,
     ) -> TestClient:
         c = TestClient(app)
-        c.app.state.settings = settings or Settings(_env_file=None)
+        # `raw` explicitly, not the shipped default.
+        #
+        # This factory bypasses the lifespan, so it also bypasses the guard
+        # that refuses to start in `calibrated` mode with no calibrator
+        # loaded. Since M25 made `calibrated` the default, inheriting it here
+        # would point ~900 tests at a configuration the gateway will not boot:
+        # `confidence.py` falls back to raw `geo_mean` when no calibrator is
+        # present, while `threshold_for` returns the calibrated 0.92 target.
+        #
+        # They all still passed, which is the alarming part — `REAL_LOGPROBS`
+        # scores 0.9725, clearing 0.55 and 0.92 alike. The suite was green by
+        # coincidence rather than because the gates behaved.
+        c.app.state.settings = settings or Settings(_env_file=None, confidence_mode="raw")
         c.app.state.ollama = stub
         c.app.state.http = None
         c.app.state.redis = None

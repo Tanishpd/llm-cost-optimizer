@@ -164,7 +164,8 @@ Demoable: `POST /route` returns the decision and reason for a prompt without exe
   `(name, runner, gate)`; the executor walks it from the router's entry point. Adding a tier means
   adding a row.
 
-**Ship with `CONFIDENCE_MODE=raw`**, `THRESHOLD_SMALL=0.55`, `THRESHOLD_LARGE=0.62`. Do not ship 0.85
+**Ship with `CONFIDENCE_MODE=raw`** until a real-frontier run earns otherwise (it did, in M23 —
+the default flipped to `calibrated` in 0.4.0). `THRESHOLD_SMALL=0.55`, `THRESHOLD_LARGE=0.62`. Do not ship 0.85
 against the raw geometric mean — RESEARCH.md §3 explains why that escalates nearly everything. The
 0.85 gets earned in M6.
 
@@ -1024,7 +1025,7 @@ KB of paid API responses backing a documented result lived on one laptop with
 no way to recreate it that day. The docs said "never re-spend to recompute
 something already on disk"; that only holds if the disk is version-controlled.
 
-902 unit tests, 186 doc checks.
+903 unit tests, 186 doc checks.
 
 ---
 
@@ -1093,8 +1094,9 @@ token budget, dataset size and judge, and the lifespan refuses to start in
 fitted on other models is worse than none: it returns a number in [0, 1] that
 looks exactly like a probability.
 
-**The shipped default stays `raw`** — a portability decision, not a verdict on
-the calibration. See RESEARCH.md §3.7.
+**The shipped default stayed `raw` here**, on portability grounds; 0.4.0 (M25)
+flipped it to `calibrated` once the provenance guard made a model mismatch a
+startup refusal rather than a silent wrong number. See RESEARCH.md §3.7.
 
 Also hardened: `.gitignore` went from `.env` + `.env.local` (exact matches) to
 `.env*`, after a routine `cp .env .env.backup` produced an untracked file
@@ -1137,7 +1139,38 @@ nothing. Caught by disabling the feature and re-running, which is now how these
 get checked. Rewritten to give one tenant two keys, where the bound is the
 whole point.
 
-902 unit tests, 186 doc checks.
+903 unit tests, 186 doc checks.
+
+---
+
+## M25 — acting on the measurement (2026-07-29)
+
+0.3.0 measured that both gates pass and left `CONFIDENCE_MODE` at `raw` for
+portability: the weights describe `qwen2.5:0.5b` / `qwen2.5:3b` and nothing
+else, and a default that hard-fails on a model swap serves nobody.
+
+What changed the calculus is the provenance guard shipped alongside it. A
+mismatch is now a **startup refusal naming both model sets**, not a silent
+wrong number — so the failure mode is loud and self-explaining. A default that
+fails clearly on the configuration it cannot serve beats one that quietly
+under-uses a result that cost real money to establish. `calibrated` ships.
+
+`eval/calibrator.json` is committed and was fitted on the models `config.py`
+defaults to, which is the only reason this works out of the box.
+`tests/test_config_schemas.py` asserts those two agree, so changing one without
+the other fails locally rather than in a deployment.
+
+**The change caught a fidelity bug in the test suite.** Both client factories
+bypass the lifespan, so they bypass the guard — and `confidence.py` falls back
+to raw `geo_mean` when no calibrator is loaded, while `threshold_for` returns
+the calibrated `0.92`. Inheriting the new default pointed ~900 tests at a
+configuration the gateway refuses to boot.
+
+They all still passed. `REAL_LOGPROBS` scores `0.9725`, which clears `0.55` and
+`0.92` alike, so the suite was green by coincidence rather than because the
+gates behaved. Both factories now pin `confidence_mode="raw"` explicitly.
+
+903 unit tests, 186 doc checks.
 
 ---
 
