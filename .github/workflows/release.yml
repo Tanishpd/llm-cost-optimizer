@@ -51,14 +51,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - id: name
+        # `github.repository` keeps the owner's casing — `Tanishpd/...` — and
+        # OCI requires repository names to be lowercase, so buildx rejects the
+        # tag outright: "repository name must be lowercase". It fails at the
+        # push, after verify has passed and the image has built, and it would
+        # fail for every tag ever pushed. v0.3.0 was the first tag cut since
+        # this workflow was written, which is when it surfaced.
+        #
+        # `tr`, not bash's `${VAR,,}`: the latter needs bash 4+, so it cannot
+        # be run on a macOS dev machine (still bash 3.2) even though it works
+        # on the Ubuntu runner. A release step is the wrong place to depend on
+        # something the author cannot execute locally.
+        run: |
+          lower=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          echo "image=ghcr.io/$lower" >> "$GITHUB_OUTPUT"
+
       - id: build
         uses: docker/build-push-action@v7
         with:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-            ghcr.io/${{ github.repository }}:latest
+            ${{ steps.name.outputs.image }}:${{ github.ref_name }}
+            ${{ steps.name.outputs.image }}:latest
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -70,7 +86,7 @@ jobs:
         run: |
           echo "### Image" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.name.outputs.image }}@${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
   release:
