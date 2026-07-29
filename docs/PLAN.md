@@ -741,7 +741,7 @@ missing local tiers are the fault.
 entry. An alert with no next step is a page at 3am and nothing else. Verified by
 deleting an entry and watching it fail.
 
-751 unit tests, 157 doc checks.
+751 unit tests, 161 doc checks.
 
 ---
 

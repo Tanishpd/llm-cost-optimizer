@@ -285,7 +285,7 @@ which is worse than shared but far better than none.
 **M0–M16 complete (2026-07-29).** The gateway runs and is hardened: all five tiers, both gates, eval
 harness, dashboard, auth, shared rate limiting, circuit breakers, structured logging, container
 image, streaming, per-tenant budgets, a durable audit trail. **751 unit + 10 integration
-tests** at 96% coverage, 157 doc-consistency checks. `python3 scripts/demo.py`
+tests** at 96% coverage, 161 doc-consistency checks. `python3 scripts/demo.py`
 walks every tier.
 
 **Shipping in `raw` confidence mode, not `calibrated`** — M6 fitted both calibrators and gate
