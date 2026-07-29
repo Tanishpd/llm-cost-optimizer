@@ -631,3 +631,62 @@ def test_the_ollama_outage_scenario_is_bounded(budget_client):
     # Once the ceiling binds and Ollama is still down, there is nothing left to
     # serve with — a loud 503 rather than a quiet invoice.
     assert 503 in codes
+
+
+# --------------------------------------------------------------------------
+# found by mutation testing
+#
+# `scripts/mutation.sh` mutates the pure modules and reports which changes no
+# test notices. These are the survivors that turned out to be real.
+# --------------------------------------------------------------------------
+
+
+async def test_record_scopes_both_counters_to_the_same_window():
+    """Mutant: `window_key(GLOBAL_BUCKET, now=now)` -> `now=None` survived.
+
+    The tenant counter honoured the caller's clock and the global one used
+    wall-clock. Everywhere except a day boundary that is invisible; across one
+    the two land in different windows and disagree about the same request —
+    the gateway total would omit spend the tenant total contains.
+    """
+    redis = FakeRedis()
+    ledger = BudgetLedger(redis, registry(acme="5.00"),
+                          max_daily_spend_usd=Decimal("10.00"))
+    yesterday = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+
+    await ledger.record("acme", 1000, now=yesterday)
+
+    assert redis.store.get(window_key("acme", now=yesterday)) == 1000
+    assert redis.store.get(window_key(GLOBAL_BUCKET, now=yesterday)) == 1000, (
+        "the global counter did not use the window it was given")
+    # And nothing landed in today's window.
+    assert window_key(GLOBAL_BUCKET) not in redis.store
+
+
+async def test_a_free_request_does_not_touch_redis():
+    """Mutant: `cost_micro_usd <= 0` -> `< 0` survived.
+
+    Local answers and cache hits cost nothing, and they are the majority of
+    traffic. Recording a zero would put two pointless round-trips on the
+    fastest path in the system.
+    """
+    redis = FakeRedis()
+    ledger = BudgetLedger(redis, registry(acme="5.00"))
+    assert await ledger.record("acme", 0) == -1
+    assert redis.store == {}, "a zero-cost request wrote to Redis"
+
+    # ...but a single micro-USD is still money and must be recorded. The
+    # boundary is `<= 0`, not `<= 1`; a mutant moving it survived until this.
+    assert await ledger.record("acme", 1) == 1
+    assert redis.store[window_key("acme")] == 1
+
+
+def test_the_overshoot_bound_is_computed_at_a_scale_that_separates_it():
+    """Mutant: `Decimal(1_000_000)` -> `Decimal(1000001)` survived.
+
+    At the shipped 4096 tokens the two divisors agree to within a rounding
+    step, so the original assertion could not tell them apart. Priced per
+    *million* tokens, the constant only matters at scale — so assert at scale.
+    """
+    micro = max_overshoot_micro(1_000_000, Decimal("10.00"))
+    assert micro == usd_to_micro(Decimal("10.00")), "per-million pricing is off"

@@ -1,0 +1,41 @@
+# Mutation testing on a schedule, never on a PR.
+#
+# It takes minutes rather than seconds, and a chunk of its output is
+# *equivalent mutants* — changes that alter the source without altering
+# behaviour, which no test can kill. Gating a PR on that trades real feedback
+# latency for a slow-moving signal, and pushes people into writing brittle
+# tests to chase a percentage.
+#
+# Weekly, and on demand. It reports; it does not block.
+name: Mutation
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+jobs:
+  mutmut:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with: {python-version: "3.14", cache: pip}
+      - run: |
+          pip install -r requirements-dev.txt
+          pip install mutmut
+
+      - name: Run
+        # `|| true` on purpose: mutmut exits non-zero when anything survives,
+        # and survivors are expected — see the baseline in scripts/mutation.sh.
+        run: |
+          PY=$(dirname "$(which python)") ./scripts/mutation.sh 2>&1 | tee /tmp/mutation.txt || true
+
+      - name: Summarise
+        run: |
+          {
+            echo '### Mutation testing'
+            echo '```'
+            grep -E "🎉|survived" /tmp/mutation.txt | head -40
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY

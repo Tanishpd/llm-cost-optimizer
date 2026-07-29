@@ -362,6 +362,7 @@ def check_promised_files_exist() -> None:
                 "app/main.py", "app/cascade.py", "app/confidence.py", "app/security.py",
                 "eval/dataset.py", "eval/run_eval.py", "scripts/preflight.py",
                 "scripts/demo.py", "scripts/loadtest.py", "scripts/soak.py",
+                "scripts/mutation.sh", "scripts/multiworker_check.py",
                 "static/dashboard.html",
                 "mock_frontier/main.py", "Dockerfile", "docker-compose.yml",
                 "app/resilience.py", "app/ratelimit.py", "app/logging_setup.py",

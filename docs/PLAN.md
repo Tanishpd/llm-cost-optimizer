@@ -857,6 +857,66 @@ in three places.
 
 794 unit tests, 169 doc checks.
 
+### M19 — Mutation testing and multi-worker in CI ✅ DONE (2026-07-29)
+
+The two testing gaps the README had been naming since M13.
+
+**Mutation testing.** Coverage says a line ran; this asks whether a test would
+*fail* if that line were wrong. Scoped to the pure modules in `setup.cfg` —
+against I/O code most mutants are unkillable noise (a reordered await, a changed
+log line) and they bury the findings. The tool is only useful while its output
+is short enough to read.
+
+1953 mutants in ~3 minutes, 29 survivors on the first run. Six were real:
+
+    the global budget counter ignored the `now` it was given, so at a UTC day
+      boundary the tenant and gateway totals landed in different windows and
+      silently disagreed about the same request
+    a zero-cost request wrote to Redis twice — on the fastest path in the system
+    a 1 micro-USD charge was dropped rather than recorded
+    ns_to_ms could be rescaled or re-rounded and nothing noticed
+    max_overshoot_micro's per-million divisor was unasserted at any scale that
+      could separate 1_000_000 from 1_000_001
+    sequence_probability([]) — a deliberately-unused counter-example whose
+      behaviour was unpinned, so it could have taught the wrong thing
+
+The first fix for `ns_to_ms` did not work, which is itself the lesson: a
+one-in-a-million divisor error needs ~1e11 ns before it moves the first decimal
+place, so asserting at small values cannot separate them. The test now asserts
+at scale.
+
+Baseline after: **1953 mutants, 19 survivors**, all either a changed detail
+string (the prose explaining a guard rejection, a log message) or provably
+equivalent — `similarity()`'s `or` becoming `and` computes 0/n = 0.0 on the
+same input, so nothing observable changes. Neither is worth a test; asserting
+exact prose is brittle and equivalent mutants are unkillable by definition.
+
+**Not a CI gate**, deliberately. Minutes rather than seconds, and a percentage
+target would push someone into writing brittle tests to chase equivalent
+mutants. Weekly, reporting.
+
+**Multi-worker in CI.** M10 verified shared state by hand, once, and never
+again — which for this class of bug is close to not verifying it. A
+per-process fallback does not *fail*; it works, in each worker separately, and
+the only symptom is a limit quietly multiplied by the worker count.
+
+`scripts/multiworker_check.py` runs against four real processes, no Ollama —
+requests are pinned to the mock frontier, since the properties under test are
+about Redis and process boundaries. Verified in both directions, which is the
+part that matters:
+
+    with Redis         distributed ok | cache 6/6 | single-flight 8/8 by 1 call
+                       | rate limit 3 of 60 admitted            -> PASS
+    Redis unreachable  distributed FAIL | cache 0/6 | rate limit 45 of 60
+                       admitted (the per-process multiplication) -> FAILED
+
+That second run exposed a flaw in the check itself: single-flight *passed*
+vacuously, because with no Redis the telemetry delta is 0 and 0 slipped under a
+`<= 2` bound. A vacuous pass is worse than a failure — it is a failure you have
+been told not to worry about. The bound is now `1 <= calls <= 2`.
+
+799 unit tests, 175 doc checks.
+
 ---
 
 ## Configuration surface

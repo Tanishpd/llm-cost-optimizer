@@ -75,6 +75,47 @@ jobs:
       - name: Known vulnerabilities
         run: pip-audit --requirement requirements.txt --strict --progress-spinner off
 
+  # M10 verified shared state by hand, once. A per-process fallback does not
+  # fail — it *works*, in each worker separately, and the only symptom is a
+  # limit that quietly multiplies by the worker count. That needs a machine
+  # watching it, not a memory.
+  multiworker:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7.2-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with: {python-version: "3.14", cache: pip}
+      - run: pip install -r requirements.txt
+
+      # No Ollama: requests are pinned to the frontier tier, which is the mock
+      # — pure Python, starts anywhere. The properties under test are about
+      # Redis and process boundaries, and 2.6 GB of local models would make
+      # this untestable here for no gain.
+      - name: Start the mock frontier and 4 workers
+        env:
+          RATE_LIMIT_PER_MINUTE: "20"
+          SEMANTIC_ENABLED: "false"
+          AUDIT_ENABLED: "false"
+          WARM_MODELS_ON_STARTUP: "false"
+          MOCK_LATENCY_MS: "300"
+        run: |
+          uvicorn mock_frontier.main:app --port 8001 --log-level warning &
+          uvicorn app.main:app --port 8000 --workers 4 --log-level warning &
+          for i in $(seq 1 40); do
+            curl -fsS http://localhost:8000/livez >/dev/null 2>&1 && break; sleep 1
+          done
+          sleep 3
+
+      - name: Shared state holds across workers
+        run: python scripts/multiworker_check.py --workers 4 --rate-limit 20
+
   lint:
     runs-on: ubuntu-latest
     steps:

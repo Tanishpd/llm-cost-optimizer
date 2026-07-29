@@ -3,9 +3,9 @@
 An API gateway that sits in front of several models of escalating cost and decides — per request —
 the cheapest one that will actually do the job.
 
-> **Status: M0–M18 complete. The gateway runs, and it's hardened.**
+> **Status: M0–M19 complete. The gateway runs, and it's hardened.**
 > All five tiers, both confidence gates, the eval harness and the dashboard are built and working —
-> **794 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
+> **799 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
 > rate
 > limiting, per-tenant budgets, a durable audit trail, circuit breakers, structured
 > logging and a container image are in. Run
@@ -452,7 +452,7 @@ from exactly-summed integer token counters.
 ## How it's tested
 
 ```bash
-.venv/bin/python -m pytest -m "not integration"   # 794, hermetic — needs nothing running
+.venv/bin/python -m pytest -m "not integration"   # 799, hermetic — needs nothing running
 .venv/bin/ruff check app eval scripts mock_frontier tests
 .venv/bin/python scripts/check_docs.py            # 133 cross-document checks
 ```
@@ -463,13 +463,15 @@ suite had caught **one of fourteen**.
 
 | Layer | Catches | Blind to |
 |---|---|---|
-| **Unit** (794) | logic inside a module | whether modules are connected |
+| **Unit** (799) | logic inside a module | whether modules are connected |
 | **Wiring** | components not plugged in; settings wired to nothing | anything the real lifespan can't reach |
 | **Rendering** | dashboard JS that doesn't parse, run, or match the DOM | visual layout |
-| **Doc checks** (169) | docs contradicting the code | whether the code is right |
+| **Doc checks** (175) | docs contradicting the code | whether the code is right |
 | **Integration** (10) | real models, real Redis, the real OpenAI SDK | sustained load |
 | **Load** | cost identities under concurrency | correctness of one request |
 | **Soak** | memory/fd growth, latency drift over time | anything faster than a window |
+| **Multi-worker** | state that stopped being shared across processes | single-process logic |
+| **Mutation** | assertions that would not fail if the code were wrong | anything outside the pure modules |
 
 Two things worth knowing:
 
@@ -483,10 +485,21 @@ dead setting on its first run.
 dead proxy so a test that starts reaching the network fails there rather than
 becoming flaky later.
 
-**Still not covered**, stated rather than implied: no property-based or mutation
-testing — nothing currently grades whether an assertion would fail if the code
-were wrong. Concurrency is tested in a few places, but M10's multi-worker
-verification was done by hand and isn't in CI.
+**Mutation testing** grades the assertions themselves — would a test *fail* if the code were wrong,
+rather than merely execute the line? `./scripts/mutation.sh` mutates the pure modules; the current
+baseline is 1953 mutants, 19 survivors, all of them changed prose or provably equivalent. The run
+that established it found six real gaps, including a budget counter that ignored the window it was
+given and would have made the tenant and gateway totals disagree across a UTC day boundary.
+
+It is **not** a CI gate — it takes minutes and its output needs reading, not thresholding. It runs
+weekly and reports.
+
+**Multi-worker state is verified in CI** with four real worker processes against Redis: the rate limit
+is one shared window, the cache spans workers, single-flight collapses duplicates. Verified in both
+directions — with Redis unreachable the check *fails*, which is the point, since a per-process
+fallback doesn't break anything, it just quietly multiplies your limit by the worker count.
+
+**Still not covered:** no property-based testing (`hypothesis`) over the pure functions.
 
 ### Measuring the claim, continuously
 
@@ -559,7 +572,7 @@ days.
 
 ## Milestones
 
-Nineteen milestones, each independently runnable. M0 came first deliberately: it resolves the one
+Twenty milestones, each independently runnable. M0 came first deliberately: it resolves the one
 assumption everything else rests on, before anything is built on top of it.
 
 | | Milestone | State |
@@ -583,10 +596,11 @@ assumption everything else rests on, before anything is built on top of it.
 | **M16** | Release engineering, supply chain, runbook | **done** |
 | **M17** | Security hardening | **done** — found a cross-tenant leak |
 | **M18** | Shadow sampling | **done** — the claim, measured continuously |
+| **M19** | Mutation testing, multi-worker in CI | **done** — found 6 real gaps |
 
 ```
 $ .venv/bin/python -m pytest -q -m "not integration"
-794 passed, 10 deselected in 6.1s
+799 passed, 10 deselected in 10.1s
 
 $ .venv/bin/python scripts/preflight.py
   ✓ python 3.14.6   ✓ venv   ✓ disk 34.1 GB free   ! swap 87%
@@ -596,7 +610,7 @@ $ .venv/bin/python scripts/preflight.py
   ✓ redis reachable, no modules (brute-force cosine, as designed)
 
 $ .venv/bin/python scripts/check_docs.py
-  all 169 checks passed
+  all 175 checks passed
 ```
 
 The 10 integration tests need a live Ollama — one also needs the `openai` SDK, because a

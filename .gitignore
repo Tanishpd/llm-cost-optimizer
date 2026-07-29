@@ -35,3 +35,6 @@ audit/
 # Coverage artifacts
 .coverage
 htmlcov/
+
+# mutmut copies the tree here to mutate it.
+mutants/

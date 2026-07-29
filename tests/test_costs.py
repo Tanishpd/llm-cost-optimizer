@@ -189,3 +189,29 @@ def test_ns_to_ms_converts_ollama_durations():
 def test_ns_to_ms_handles_missing_durations():
     assert ns_to_ms(None) == 0.0
     assert ns_to_ms(0) == 0.0
+
+
+# --------------------------------------------------------------------------
+# found by mutation testing
+# --------------------------------------------------------------------------
+
+
+def test_ns_to_ms_uses_the_right_divisor_and_precision():
+    """Two mutants survived here: `/1_000_000` -> `/1000001`, and
+    `round(..., 1)` -> `round(..., 2)`.
+
+    Nothing asserted either, because every existing test only checked that the
+    number was "about right". Latency is reported to the caller in `x_hlr` and
+    charted on the dashboard; a silently rescaled or re-rounded figure is the
+    kind of wrong that gets believed.
+    """
+    assert ns_to_ms(1_000_000) == 1.0
+    assert ns_to_ms(1_500_000_000) == 1500.0
+    # One decimal place, exactly — not two.
+    assert ns_to_ms(1_234_567) == 1.2
+    assert ns_to_ms(0) == 0.0
+    # The divisor is only separable at scale: a one-in-a-million error needs
+    # ~1e11 ns before it moves the first decimal place. Asserting at small
+    # values cannot tell 1_000_000 from 1_000_001, which is why the first
+    # version of this test still let that mutant live.
+    assert ns_to_ms(100_000_000_000) == 100_000.0

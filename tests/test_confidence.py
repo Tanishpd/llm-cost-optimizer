@@ -445,3 +445,15 @@ def test_real_easy_prompt_clears_the_raw_threshold():
     comfortably over THRESHOLD_SMALL=0.55."""
     v = evaluate_gate("small", CAPTURED_PARIS, "Paris", threshold=0.55)
     assert v.verdict == "accept"
+
+
+def test_sequence_probability_of_nothing_is_zero_not_one():
+    """Mutant: the empty case returned 1.0 and no test noticed.
+
+    This function is deliberately unused — it exists as an executable
+    counter-example to the approach the brief implies (RESEARCH.md §3). A
+    counter-example whose behaviour is unpinned teaches the wrong thing as
+    easily as the right one, and 1.0 would read as "certain" for no evidence
+    at all.
+    """
+    assert sequence_probability([]) == 0.0
