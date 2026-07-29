@@ -226,6 +226,12 @@ Releases publish a digest-addressed image. **Pin the digest, not the tag** —
 docker run ghcr.io/<owner>/llm-cost-optimizer@sha256:<digest>
 ```
 
+`<owner>` is **lowercase**, whatever case the GitHub account uses. OCI requires
+it, and buildx rejects the tag outright — `repository name must be lowercase` —
+rather than normalizing. The release workflow lowercases
+`${GITHUB_REPOSITORY,,}` for exactly this reason; it built the image and failed
+at the push on v0.3.0, the first tag cut since that workflow was written.
+
 The digest for each release is in that release's build summary.
 
 **What a rollback does not undo.** Redis holds cached answers keyed partly by
