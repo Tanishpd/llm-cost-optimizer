@@ -253,6 +253,33 @@ def check_request_defaults_match_config() -> None:
                   str(value) in row.group(0))
 
 
+def check_readme_agrees_with_itself_on_counts() -> None:
+    """The README states the test and doc-check totals in several places.
+
+    They must agree with each other. Milestone tables and header blurbs get
+    updated; a bare `# 845, hermetic` in a shell comment does not, because it
+    does not match whatever pattern the last sweep used. That one sat four
+    hundred lines from a table saying 903, contradicting it, for as long as
+    nobody read both in the same sitting.
+
+    Cross-file totals are not checked here: PLAN.md's milestone entries are
+    history and are *supposed* to disagree with the present. This is strictly
+    "does one document contradict itself".
+    """
+    readme = (ROOT / "README.md").read_text()
+    tests = set(re.findall(r"\*\*(\d+) unit tests?\*\*", readme))
+    tests |= set(re.findall(r"\|\s*\*\*Unit\*\*\s*\((\d+)\)", readme))
+    tests |= set(re.findall(r'pytest -m "not integration"\s*#\s*(\d+)', readme))
+    checks = set(re.findall(r"\|\s*\*\*Doc checks\*\*\s*\((\d+)\)", readme))
+    checks |= set(re.findall(r"check_docs\.py\s*#\s*(\d+)", readme))
+
+    check("README states a unit-test count", bool(tests))
+    check("README's unit-test counts agree with each other", len(tests) <= 1,
+          f"found {sorted(tests)} — a sweep updated some and missed others")
+    check("README's doc-check counts agree with each other", len(checks) <= 1,
+          f"found {sorted(checks)}")
+
+
 def check_milestone_counts_are_history_not_status() -> None:
     """Milestone entries in PLAN.md record what was true *at that milestone*.
 
@@ -461,6 +488,7 @@ def main() -> int:
     check_promised_files_exist()
     check_dashboard_is_self_contained()
     check_eval_cost_matches_the_dataset()
+    check_readme_agrees_with_itself_on_counts()
     check_milestone_counts_are_history_not_status()
     check_version_is_single_sourced()
     check_runbook_covers_the_alertable_signals()
