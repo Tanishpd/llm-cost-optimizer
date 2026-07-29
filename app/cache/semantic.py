@@ -90,6 +90,10 @@ class SemanticCache:
         self._ids: list[str] = []
         self._prompts: list[str] = []
         self._exact_keys: list[str] = []
+        # Which tenant wrote each entry. Empty string under
+        # CACHE_SCOPE=global, which is every entry written before
+        # the setting existed — so an old index stays usable.
+        self._scopes: list[str] = []
         self._version: int = -1
 
     @property
@@ -146,7 +150,8 @@ class SemanticCache:
         try:
             ids = await self._redis.zrange(IDS_KEY, 0, -1)
             if not ids:
-                self._matrix, self._ids, self._prompts, self._exact_keys = None, [], [], []
+                self._matrix, self._ids, self._prompts = None, [], []
+                self._exact_keys, self._scopes = [], []
                 self._version = remote
                 return True
 
@@ -158,7 +163,7 @@ class SemanticCache:
             logger.warning("semantic replica sync failed, keeping stale matrix: %s", exc)
             return False
 
-        vectors, kept_ids, prompts, exact_keys = [], [], [], []
+        vectors, kept_ids, prompts, exact_keys, scopes = [], [], [], [], []
         for entry_id, row in zip(ids, rows, strict=False):
             if not row or not row.get("vec"):
                 continue
@@ -168,9 +173,11 @@ class SemanticCache:
             kept_ids.append(entry_id)
             prompts.append(row.get("prompt", ""))
             exact_keys.append(row.get("exact_key", ""))
+            scopes.append(row.get("scope", ""))
 
         self._matrix = np.vstack(vectors) if vectors else None
         self._ids, self._prompts, self._exact_keys = kept_ids, prompts, exact_keys
+        self._scopes = scopes
         self._version = remote
         logger.info("semantic replica synced: %d vector(s) at version %d", len(kept_ids), remote)
         return True
@@ -184,8 +191,15 @@ class SemanticCache:
         prompt: str,
         key: CacheKey,
         is_multi_turn: bool,
+        scope: str = "",
     ) -> SemanticHit | SemanticMiss:
-        """Find an interchangeable earlier answer, or explain why not."""
+        """Find an interchangeable earlier answer, or explain why not.
+
+        `scope` isolates the search under `CACHE_SCOPE=tenant`. Scoping the
+        *exact* key is not enough on its own: this index is searched by vector
+        similarity, so without this a tenant's query would still match another
+        tenant's entry and be served their answer.
+        """
         if not self._enabled:
             return SemanticMiss(detail="semantic cache disabled")
 
@@ -210,6 +224,15 @@ class SemanticCache:
 
         # Brute force. Vectors are unit-normalized, so this dot product IS cosine.
         scores = self._matrix @ query
+
+        if scope:
+            # Mask out every entry belonging to someone else. -inf rather than
+            # deletion so `best` still indexes the real arrays.
+            mine = np.array([s == scope for s in self._scopes], dtype=bool)
+            if not mine.any():
+                return SemanticMiss(detail="no entries in this cache scope")
+            scores = np.where(mine, scores, -np.inf)
+
         best = int(np.argmax(scores))
         similarity = float(scores[best])
 
@@ -247,6 +270,7 @@ class SemanticCache:
         key: CacheKey,
         is_multi_turn: bool = False,
         ttl: int = 3600,
+        scope: str = "",
     ) -> bool:
         """Index a prompt so future rewordings can find it.
 
@@ -272,6 +296,7 @@ class SemanticCache:
                     "vec": vector.tobytes().decode("latin-1"),
                     "prompt": prompt,
                     "exact_key": key.digest,
+                    "scope": scope,
                 },
             )
             pipe.expire(f"{VEC_PREFIX}{entry_id}", ttl)

@@ -103,11 +103,17 @@ def build_key(
     top_p: float,
     max_tokens: int,
     system_prompt: str = "",
+    scope: str = "",
 ) -> CacheKey:
     """Compose the exact-cache key.
 
     `model` is the *tier's* model, so an answer from the 0.5B is never served
     for a request that would have gone to the 3B.
+
+    `scope` is the tenant under `CACHE_SCOPE=tenant` and empty under `global`.
+    Empty is the default and hashes to the same digests as before this
+    parameter existed, so turning isolation *off* again does not orphan a
+    cache.
 
     Floats are formatted with `repr` so `0.0` and `-0.0` and `0` all render
     identically — `str(float)` is stable in Python 3, but being explicit here
@@ -117,6 +123,10 @@ def build_key(
     sys_hash = system_prompt_hash(system_prompt)
     digest = _hash(
         KEY_SCHEMA_VERSION,
+        # Empty under CACHE_SCOPE=global, which is the default and keeps every
+        # existing key valid. Under CACHE_SCOPE=tenant this is the tenant name,
+        # so a hit can only ever be that tenant's own earlier request.
+        scope,
         normalized,
         model,
         repr(float(temperature)),

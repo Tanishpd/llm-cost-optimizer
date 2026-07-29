@@ -3,9 +3,9 @@
 An API gateway that sits in front of several models of escalating cost and decides — per request —
 the cheapest one that will actually do the job.
 
-> **Status: M0–M16 complete. The gateway runs, and it's hardened.**
+> **Status: M0–M17 complete. The gateway runs, and it's hardened.**
 > All five tiers, both confidence gates, the eval harness and the dashboard are built and working —
-> **751 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
+> **765 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
 > rate
 > limiting, per-tenant budgets, a durable audit trail, circuit breakers, structured
 > logging and a container image are in. Run
@@ -373,6 +373,12 @@ req 4-5   503  spend_ceiling_reached  (bounded)
 spent     $0.000624 against a $0.0006 ceiling — one request's overshoot
 ```
 
+**Caches are shared across tenants by default** — that sharing is where the savings come from, since
+the second tenant to ask a common question pays nothing. The cost is that a semantic hit can match
+another tenant's entry, so the reason string withholds the matched text in that mode.
+`CACHE_SCOPE=tenant` isolates both caches instead, trading the cross-tenant saving for isolation
+([D28](docs/DECISIONS.md)).
+
 ### Audit trail
 
 One JSON line per request in `AUDIT_PATH`, **including refusals**, durable across restarts:
@@ -446,7 +452,7 @@ from exactly-summed integer token counters.
 ## How it's tested
 
 ```bash
-.venv/bin/python -m pytest -m "not integration"   # 751, hermetic — needs nothing running
+.venv/bin/python -m pytest -m "not integration"   # 765, hermetic — needs nothing running
 .venv/bin/ruff check app eval scripts mock_frontier tests
 .venv/bin/python scripts/check_docs.py            # 133 cross-document checks
 ```
@@ -457,10 +463,10 @@ suite had caught **one of fourteen**.
 
 | Layer | Catches | Blind to |
 |---|---|---|
-| **Unit** (751) | logic inside a module | whether modules are connected |
+| **Unit** (765) | logic inside a module | whether modules are connected |
 | **Wiring** | components not plugged in; settings wired to nothing | anything the real lifespan can't reach |
 | **Rendering** | dashboard JS that doesn't parse, run, or match the DOM | visual layout |
-| **Doc checks** (161) | docs contradicting the code | whether the code is right |
+| **Doc checks** (165) | docs contradicting the code | whether the code is right |
 | **Integration** (10) | real models, real Redis, the real OpenAI SDK | sustained load |
 | **Load** | cost identities under concurrency | correctness of one request |
 | **Soak** | memory/fd growth, latency drift over time | anything faster than a window |
@@ -525,7 +531,7 @@ days.
 
 ## Milestones
 
-Seventeen milestones, each independently runnable. M0 came first deliberately: it resolves the one
+Eighteen milestones, each independently runnable. M0 came first deliberately: it resolves the one
 assumption everything else rests on, before anything is built on top of it.
 
 | | Milestone | State |
@@ -547,10 +553,11 @@ assumption everything else rests on, before anything is built on top of it.
 | **M14** | A spend ceiling that ships armed | **done** — bounds invariant 4 |
 | **M15** | Prometheus metrics, soak testing | **done** |
 | **M16** | Release engineering, supply chain, runbook | **done** |
+| **M17** | Security hardening | **done** — found a cross-tenant leak |
 
 ```
 $ .venv/bin/python -m pytest -q -m "not integration"
-751 passed, 10 deselected in 10.4s
+765 passed, 10 deselected in 5.7s
 
 $ .venv/bin/python scripts/preflight.py
   ✓ python 3.14.6   ✓ venv   ✓ disk 34.1 GB free   ! swap 87%
@@ -560,7 +567,7 @@ $ .venv/bin/python scripts/preflight.py
   ✓ redis reachable, no modules (brute-force cosine, as designed)
 
 $ .venv/bin/python scripts/check_docs.py
-  all 161 checks passed
+  all 165 checks passed
 ```
 
 The 10 integration tests need a live Ollama — one also needs the `openai` SDK, because a

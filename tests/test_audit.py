@@ -403,3 +403,41 @@ def test_refusals_are_audited(tmp_path):
     assert refusals[0]["code"] == "budget_exhausted"
     assert refusals[0]["tenant"] == "acme"
     assert refusals[0]["cost_micro_usd"] == 0
+
+
+async def test_the_trail_is_not_world_readable(tmp_path):
+    """It records who asked for what and what it cost. It was being written
+    0644 in a 0755 directory, which on a shared host means every local account
+    can read the gateway's traffic history."""
+    import stat
+
+    log = AuditLog(tmp_path / "audit", flush_interval_s=0.01)
+    await log.start()
+    try:
+        log.write(audit_entry(record(), tenant="acme"))
+        await drained(log)
+    finally:
+        await log.stop()
+
+    dir_mode = stat.S_IMODE((tmp_path / "audit").stat().st_mode)
+    file_mode = stat.S_IMODE(log._path.stat().st_mode)
+    assert dir_mode == 0o700, f"audit directory is {oct(dir_mode)}"
+    assert file_mode == 0o600, f"audit file is {oct(file_mode)}"
+
+
+async def test_rotated_files_are_not_world_readable_either(tmp_path):
+    """Rotation reopens the file; the mode has to survive that."""
+    import stat
+
+    log = AuditLog(tmp_path, max_bytes=800, keep_files=2, flush_interval_s=0.01)
+    await log.start()
+    try:
+        for i in range(30):
+            log.write(audit_entry(record(f"t{i}"), tenant="acme"))
+            await drained(log)
+    finally:
+        await log.stop()
+
+    assert log.stats.rotations > 0, "the test did not rotate"
+    for f in tmp_path.glob("audit-*"):
+        assert stat.S_IMODE(f.stat().st_mode) == 0o600, f"{f.name} is world-readable"

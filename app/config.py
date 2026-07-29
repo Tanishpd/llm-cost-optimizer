@@ -138,6 +138,21 @@ class Settings(BaseSettings):
     # deliberately for real traffic; 0 disables it entirely.
     max_daily_spend_usd: Decimal = Decimal("10.00")
 
+    # Whether cached answers may cross tenant boundaries.
+    #
+    #   global  (default) one cache for everyone. This is where the savings
+    #           come from: the second tenant to ask a common question pays
+    #           nothing. Right for public-knowledge traffic.
+    #   tenant  the tenant is part of the cache key, so a hit can only ever be
+    #           your own earlier request. Costs the cross-tenant savings and
+    #           buys isolation.
+    #
+    # `global` also means a semantic hit can match *another tenant's* prompt,
+    # so the reason string withholds the matched text in that mode — see
+    # app/main.py. In `tenant` mode the match is always your own and the text
+    # is shown, because it is the most useful thing in the string.
+    cache_scope: Literal["global", "tenant"] = "global"
+
     # ---- Audit trail -----------------------------------------------------
     # On by default. The gateway spends money per request, so a durable record
     # of what it decided is the kind of thing you want on unless you turned it

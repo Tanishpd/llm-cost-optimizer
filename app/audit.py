@@ -121,7 +121,7 @@ class AuditLog:
         if not self.enabled or self._task is not None:
             return
         try:
-            await asyncio.to_thread(self._dir.mkdir, parents=True, exist_ok=True)
+            await asyncio.to_thread(self._make_dir)
             self._handle = await asyncio.to_thread(self._open)
         except OSError as exc:
             # A gateway that cannot write its audit log should still answer
@@ -135,8 +135,21 @@ class AuditLog:
         logger.info("audit log: %s (rotate at %d bytes, keep %d)",
                     self._path, self._rotation.max_bytes, self._rotation.keep)
 
+    def _make_dir(self) -> None:
+        """0700. The trail records who asked for what and what it cost; it was
+        being written world-readable (0755/0644), which on a shared host means
+        every local account can read the gateway's traffic history."""
+        self._dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with contextlib.suppress(OSError):
+            os.chmod(self._dir, 0o700)   # mkdir's mode is ignored if it exists
+
     def _open(self):
-        handle = self._path.open("a", encoding="utf-8")
+        # Create at 0600 before the handle exists, rather than chmod after —
+        # otherwise there is a window where the file is readable.
+        fd = os.open(self._path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
+        handle = os.fdopen(fd, "a", encoding="utf-8")
+        with contextlib.suppress(OSError):
+            os.chmod(self._path, 0o600)  # an existing file keeps its old mode
         self._rotation.written_bytes = self._path.stat().st_size
         return handle
 
@@ -282,7 +295,7 @@ class AuditLog:
         stale = self._sibling(self._rotation.keep + 1)
         if stale.exists():
             stale.unlink()
-        self._handle = self._path.open("a", encoding="utf-8")
+        self._handle = self._open()
         self._rotation.written_bytes = 0
         self.stats.rotations += 1
 

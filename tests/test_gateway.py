@@ -1206,3 +1206,114 @@ def test_the_repo_calibrator_file_loads_through_the_lifespan(monkeypatch):
             assert set(c.app.state.calibrators) == {"small", "large"}
     finally:
         get_settings.cache_clear()
+
+
+# --------------------------------------------------------------------------
+# cross-tenant caching
+#
+# The caches are global by default, which is where the savings come from: the
+# second tenant to ask a common question pays nothing. The cost of that is a
+# semantic hit can match *another tenant's* prompt — and the reason string used
+# to echo up to 60 characters of it into this caller's response and logs.
+#
+# Reproduced before it was fixed: acme asked "how much is the quarterly
+# retention bonus we pay", globex asked a near-identical question, and globex's
+# reason came back carrying acme's exact wording.
+# --------------------------------------------------------------------------
+
+
+def _two_tenants(client_factory, cache, semantic, scope="global"):
+    from app.budgets import BudgetLedger, Tenant, TenantRegistry
+    from app.security import ApiKeyAuth
+
+    reg = TenantRegistry([Tenant("acme", keys=frozenset({"sk-acme"})),
+                          Tenant("globex", keys=frozenset({"sk-globex"}))])
+    stub = StubEmbeddingOllama({"retention": FRANCE_VEC})
+    c = client_factory(stub, cache=cache, semantic=semantic, tenants=reg,
+                       settings=Settings(_env_file=None, cache_scope=scope))
+    c.app.state.auth = ApiKeyAuth({"sk-acme", "sk-globex"},
+                                  tenant_for=lambda k: reg.resolve(k).name)
+    c.app.state.budgets = BudgetLedger(None, reg)
+    return c
+
+
+ACME_PROMPT = "how much is the quarterly retention bonus we pay"
+GLOBEX_PROMPT = "what is the quarterly retention bonus we pay"
+
+
+def _post(c, content, key):
+    return c.post("/v1/chat/completions",
+                  json={"messages": [{"role": "user", "content": content}]},
+                  headers={"X-API-Key": key})
+
+
+def test_a_semantic_hit_never_echoes_another_tenants_prompt(
+        client_factory, live_cache, live_semantic):
+    """The regression. Global caching is fine; leaking the wording is not."""
+    c = _two_tenants(client_factory, live_cache, live_semantic, scope="global")
+    _post(c, ACME_PROMPT, "sk-acme")
+    hlr = _post(c, GLOBEX_PROMPT, "sk-globex").json()["x_hlr"]
+
+    assert hlr["tier"] == "cache_semantic", "the semantic tier did not engage"
+    assert "retention bonus we pay" not in hlr["reason"], (
+        "globex's response carries acme's prompt text")
+    # It still says what happened — withholding the text is not withholding
+    # the decision.
+    assert "semantic cache hit" in hlr["reason"]
+    assert "withheld" in hlr["reason"]
+
+
+def test_tenant_scope_prevents_the_cross_tenant_hit_entirely(
+        client_factory, live_cache, live_semantic):
+    """The stronger setting: no shared entry, so nothing to leak."""
+    c = _two_tenants(client_factory, live_cache, live_semantic, scope="tenant")
+    _post(c, ACME_PROMPT, "sk-acme")
+    hlr = _post(c, GLOBEX_PROMPT, "sk-globex").json()["x_hlr"]
+    assert hlr["tier"] != "cache_semantic", "globex was served acme's cached answer"
+
+
+def test_tenant_scope_still_caches_within_one_tenant(
+        client_factory, live_cache, live_semantic):
+    """Isolation must not mean no caching at all."""
+    c = _two_tenants(client_factory, live_cache, live_semantic, scope="tenant")
+    _post(c, ACME_PROMPT, "sk-acme")
+    hlr = _post(c, GLOBEX_PROMPT, "sk-acme").json()["x_hlr"]
+    assert hlr["tier"] == "cache_semantic"
+    # Your own earlier prompt, so the text is useful and shown.
+    assert "retention bonus" in hlr["reason"]
+
+
+def test_tenant_scope_isolates_the_exact_cache_too(
+        client_factory, live_cache, live_semantic):
+    """Identical prompts, different tenants — the exact cache must not bridge
+    them either."""
+    c = _two_tenants(client_factory, live_cache, live_semantic, scope="tenant")
+    _post(c, ACME_PROMPT, "sk-acme")
+    hlr = _post(c, ACME_PROMPT, "sk-globex").json()["x_hlr"]
+    assert hlr["tier"] != "cache_exact"
+
+
+def test_global_scope_is_the_default_and_still_shares(
+        client_factory, live_cache, live_semantic):
+    """The savings are the point of the default; assert they are still there."""
+    assert Settings(_env_file=None).cache_scope == "global"
+    c = _two_tenants(client_factory, live_cache, live_semantic, scope="global")
+    _post(c, ACME_PROMPT, "sk-acme")
+    hlr = _post(c, ACME_PROMPT, "sk-globex").json()["x_hlr"]
+    assert hlr["tier"] == "cache_exact", "the cross-tenant saving was lost"
+
+
+def test_global_scope_hashes_the_same_keys_as_before_the_setting_existed():
+    """Turning isolation off again must not orphan a populated cache."""
+    from app.cache.keys import build_key
+    a = build_key(prompt="q", model="m", temperature=0.0, top_p=1.0, max_tokens=10)
+    b = build_key(prompt="q", model="m", temperature=0.0, top_p=1.0, max_tokens=10,
+                  scope="")
+    assert a.digest == b.digest
+
+
+def test_tenant_scope_changes_the_digest():
+    from app.cache.keys import build_key
+    base = dict(prompt="q", model="m", temperature=0.0, top_p=1.0, max_tokens=10)
+    assert (build_key(**base, scope="acme").digest
+            != build_key(**base, scope="globex").digest)

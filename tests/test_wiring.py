@@ -163,6 +163,7 @@ INERT: dict[str, str] = {
     "tenants": "covered in tests/test_budgets.py",
     "default_daily_budget_usd": "covered in tests/test_budgets.py",
     "max_daily_spend_usd": "covered in tests/test_budgets.py (the ceiling section)",
+    "cache_scope": "covered in tests/test_gateway.py (cross-tenant caching)",
     "calibrator_path": "covered by the startup-guard tests in test_gateway.py",
     "semantic_max_entries": "index capacity; covered in tests/test_semantic_cache.py",
     "cache_ttl_local": "TTL; covered in tests/test_exact_cache.py",
