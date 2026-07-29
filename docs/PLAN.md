@@ -1025,7 +1025,7 @@ KB of paid API responses backing a documented result lived on one laptop with
 no way to recreate it that day. The docs said "never re-spend to recompute
 something already on disk"; that only holds if the disk is version-controlled.
 
-903 unit tests, 186 doc checks.
+845 unit tests, 185 doc checks.
 
 ---
 
@@ -1139,7 +1139,7 @@ nothing. Caught by disabling the feature and re-running, which is now how these
 get checked. Rewritten to give one tenant two keys, where the bound is the
 whole point.
 
-903 unit tests, 186 doc checks.
+902 unit tests, 186 doc checks.
 
 ---
 
@@ -1170,7 +1170,7 @@ They all still passed. `REAL_LOGPROBS` scores `0.9725`, which clears `0.55` and
 `0.92` alike, so the suite was green by coincidence rather than because the
 gates behaved. Both factories now pin `confidence_mode="raw"` explicitly.
 
-903 unit tests, 186 doc checks.
+903 unit tests, 189 doc checks.
 
 ---
 
