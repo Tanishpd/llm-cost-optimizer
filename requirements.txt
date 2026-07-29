@@ -16,7 +16,7 @@
 #   .venv/bin/pip install -r requirements.txt
 
 # --- direct ---
-fastapi==0.140.7
+fastapi==0.140.13
 uvicorn[standard]==0.51.0
 httpx==0.28.1
 pydantic==2.13.4
@@ -25,6 +25,13 @@ redis==8.0.1
 numpy==2.5.1
 
 # --- transitive, pinned for reproducibility ---
+#
+# NOTE: some of these are owned by a direct dependency and must not be bumped
+# independently. `pydantic` pins `pydantic-core` exactly, so a Dependabot PR
+# raising pydantic-core alone is unsatisfiable against every released pydantic
+# — which is what happened, and why dependabot.yml ignores it. If more of these
+# appear, that is the signal to move to a proper lock file (pip-compile) rather
+# than to keep adding ignores.
 annotated-types==0.8.0
 anyio==4.14.2
 certifi==2026.7.22
