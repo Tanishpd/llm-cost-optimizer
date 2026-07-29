@@ -393,3 +393,76 @@ def test_quality_preserved_assumes_escalation_fixes_things():
 
     scores, labels = np.array([0.1]), np.array([0.0])  # wrong, and escalated
     assert sweep(scores, labels, [0.5])[0].quality_preserved == 1.0
+
+
+# --------------------------------------------------------------------------
+# retrying a rate-limited provider
+#
+# A free-tier key rate-limits, and until `with_retry` existed a single 429
+# aborted the whole run. Progress was never lost — results are checkpointed
+# after every prompt — but finishing meant restarting the script by hand
+# however many times the provider decided to push back.
+# --------------------------------------------------------------------------
+
+
+async def test_a_rate_limited_call_is_retried_until_it_succeeds():
+    from app.providers.base import ProviderUnavailable
+    from eval.run_eval import with_retry
+
+    attempts = {"n": 0}
+
+    async def flaky():
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise ProviderUnavailable("frontier rate-limited the request (429)")
+        return "the answer"
+
+    assert await with_retry(flaky, what="probe", base_delay=0.001) == "the answer"
+    assert attempts["n"] == 3
+
+
+async def test_a_timeout_is_retried_too():
+    """A judge call that hangs is far more likely to be a slow provider than a
+    broken prompt."""
+    from app.providers.base import ProviderTimeout
+    from eval.run_eval import with_retry
+
+    attempts = {"n": 0}
+
+    async def slow():
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise ProviderTimeout("timed out")
+        return "ok"
+
+    assert await with_retry(slow, what="probe", base_delay=0.001) == "ok"
+
+
+async def test_it_gives_up_rather_than_looping_forever():
+    """A provider that is genuinely down must surface, not spin."""
+    from app.providers.base import ProviderUnavailable
+    from eval.run_eval import with_retry
+
+    attempts = {"n": 0}
+
+    async def dead():
+        attempts["n"] += 1
+        raise ProviderUnavailable("down")
+
+    with pytest.raises(ProviderUnavailable):
+        await with_retry(dead, what="probe", attempts=3, base_delay=0.001)
+    assert attempts["n"] == 3
+
+
+async def test_a_successful_call_is_not_delayed():
+    """The common case must cost nothing — no sleep on the happy path."""
+    import time
+
+    from eval.run_eval import with_retry
+
+    async def fine():
+        return "ok"
+
+    started = time.perf_counter()
+    assert await with_retry(fine, what="probe", base_delay=10.0) == "ok"
+    assert time.perf_counter() - started < 0.5

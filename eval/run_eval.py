@@ -29,7 +29,7 @@ import httpx
 import numpy as np
 
 from app.confidence import extract_metrics
-from app.providers.base import ProviderError
+from app.providers.base import ProviderError, ProviderTimeout, ProviderUnavailable
 from app.providers.frontier import FrontierProvider
 from app.providers.ollama import OllamaProvider
 from eval.calibration import FEATURE_NAMES, fit_calibrator, save, validate
@@ -164,21 +164,32 @@ async def collect(
                     result.label_source[tier] = "auto"
                     result.label_reason[tier] = g.reason
             elif use_real_frontier and frontier is not None and judge is not None:
-                ref = await frontier.chat(
-                    model=os.getenv("FRONTIER_MODEL", "gpt-4o"),
-                    messages=[{"role": "user", "content": p.prompt}],
-                    max_tokens=max_tokens,
+                frontier_model = os.getenv("FRONTIER_MODEL", "gpt-4o")
+                ref = await with_retry(
+                    # Bound as defaults, not captured: the lambda is called
+                    # immediately so late binding is harmless here, but a
+                    # future edit that defers it would silently use the last
+                    # loop iteration's prompt.
+                    lambda p=p, m=frontier_model: frontier.chat(
+                        model=m,
+                        messages=[{"role": "user", "content": p.prompt}],
+                        max_tokens=max_tokens,
+                    ),
+                    what=f"{p.id} reference",
                 )
                 result.reference = ref.content
                 for tier, tr in result.tiers.items():
-                    verdict = await judge.chat(
-                        model=judge_model,
-                        messages=[
-                            {"role": "system", "content": JUDGE_SYSTEM},
-                            {"role": "user",
-                             "content": judge_prompt(p.prompt, ref.content, tr.content)},
-                        ],
-                        max_tokens=10,
+                    verdict = await with_retry(
+                        lambda tr=tr, p=p, ref=ref: judge.chat(
+                            model=judge_model,
+                            messages=[
+                                {"role": "system", "content": JUDGE_SYSTEM},
+                                {"role": "user",
+                                 "content": judge_prompt(p.prompt, ref.content, tr.content)},
+                            ],
+                            max_tokens=10,
+                        ),
+                        what=f"{p.id} judge/{tier}",
                     )
                     g = parse_judge(verdict.content)
                     if g is not None:
@@ -194,6 +205,35 @@ async def collect(
             save_cached(tag, results)  # checkpoint after every prompt
 
     return results
+
+
+async def with_retry(call, *, what: str, attempts: int = 6, base_delay: float = 4.0):
+    """Retry a rate-limited or briefly-unavailable API call.
+
+    Free tiers rate-limit, and until this existed a single 429 aborted the
+    whole run. Progress was never *lost* — results are checkpointed after every
+    prompt — but finishing meant restarting the script by hand however many
+    times the provider decided to push back.
+
+    Exponential backoff from `base_delay`: 4, 8, 16, 32, 64 seconds. That is
+    generous on purpose. A per-minute quota needs a wait measured in tens of
+    seconds, and this loop is competing with nothing — the run is sequential
+    and nobody is waiting on it.
+
+    Timeouts are retried too. A judge call that hangs is far more likely to be
+    a slow provider than a broken prompt.
+    """
+    for attempt in range(attempts):
+        try:
+            return await call()
+        except (ProviderUnavailable, ProviderTimeout) as exc:
+            if attempt == attempts - 1:
+                raise
+            delay = base_delay * (2 ** attempt)
+            print(f"      {what}: {type(exc).__name__} — waiting {delay:.0f}s "
+                  f"(attempt {attempt + 1}/{attempts})")
+            await asyncio.sleep(delay)
+    raise RuntimeError("unreachable")
 
 
 def build_matrix(

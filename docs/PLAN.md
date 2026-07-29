@@ -254,7 +254,8 @@ This is what elevates the project from "works" to "measured".
   a negative result here is a real finding, not a failure.
 
 **Cost.** Per prompt: 1 reference completion + 1 judge call per local tier = 3 frontier-class calls;
-~120 prompts ≈ 360 calls. Compute the actual figure from your configured rates before running — the
+only the 43 judged prompts call out (129 calls; the other 67 are auto-gradable and free).
+Compute the actual figure from your configured rates before running — the
 price constants in `.env.example` are placeholders, not quotes. Serving continues to use the mock by
 default; only eval spends real money.
 

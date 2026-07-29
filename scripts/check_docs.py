@@ -284,6 +284,28 @@ def check_runbook_covers_the_alertable_signals() -> None:
         check(f"RUNBOOK covers {signal}", signal in runbook)
 
 
+def check_eval_cost_matches_the_dataset() -> None:
+    """The documented API-call count must come from the dataset, not memory.
+
+    It said ~360 for a long time — computed as "every prompt × 3 calls" — when
+    the true figure is a third of that, because most prompts are auto-gradable
+    and never call out. A cost figure that overstates by 3x is the kind of
+    thing that stops someone running the eval at all.
+    """
+    sys.path.insert(0, str(ROOT))
+    import eval.dataset as dataset
+
+    auto = sum(1 for p in dataset.DATASET if p.grade == "auto")
+    judged = len(dataset.DATASET) - auto
+    calls = judged * 3
+    corpus = "\n".join(d.read_text() for d in DOCS)
+
+    check(f"docs state the real eval call count ({calls})", str(calls) in corpus,
+          f"{judged} judged prompts x 3 calls; {auto} auto-gradable ones are free")
+    check("no doc still claims the old ~360 figure",
+          "360 calls" not in corpus and "≈ 360 —" not in corpus)
+
+
 def check_endpoints_documented() -> None:
     """Every route the app serves must appear in API.md.
 
@@ -387,6 +409,7 @@ def main() -> int:
     check_no_stale_status()
     check_promised_files_exist()
     check_dashboard_is_self_contained()
+    check_eval_cost_matches_the_dataset()
     check_version_is_single_sourced()
     check_runbook_covers_the_alertable_signals()
     check_request_defaults_match_config()

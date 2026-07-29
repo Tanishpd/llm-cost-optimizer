@@ -241,8 +241,10 @@ Only `/healthz` and `/` are public (a load balancer has no credentials).
 
 ## Cost of running eval
 
-`eval/run_eval.py` with `EVAL_USE_REAL_FRONTIER=true` spends real money (~120 prompts × 3 calls
-≈ 360 — 1 reference completion + 1 judge call per local tier).
+`eval/run_eval.py` with `EVAL_USE_REAL_FRONTIER=true` spends real money — but far less than the
+prompt count suggests. Of 110 prompts, **67 are auto-gradable and make no API calls at
+all**; only the 43 judged ones do, at 1 reference + 1 judge per local tier = **129 calls**.
+(An earlier note here said ~360, by assuming every prompt hits the API.)
 Every API response is cached to `eval/runs/*.json`; **always reuse that cache when re-fitting
 calibrators.** Never re-spend to recompute something already on disk, and never enable the real
 frontier for serving — only eval.
@@ -288,8 +290,8 @@ which is worse than shared but far better than none.
 
 **M0–M20 complete (2026-07-29).** The gateway runs and is hardened: all five tiers, both gates, eval
 harness, dashboard, auth, shared rate limiting, circuit breakers, structured logging, container
-image, streaming, per-tenant budgets, a durable audit trail. **823 unit + 10 integration
-tests** at 96% coverage, 179 doc-consistency checks. `python3 scripts/demo.py`
+image, streaming, per-tenant budgets, a durable audit trail. **827 unit + 10 integration
+tests** at 96% coverage, 181 doc-consistency checks. `python3 scripts/demo.py`
 walks every tier.
 
 **Shipping in `raw` confidence mode, not `calibrated`** — M6 fitted both calibrators and gate
