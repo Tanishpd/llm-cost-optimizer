@@ -1024,7 +1024,81 @@ KB of paid API responses backing a documented result lived on one laptop with
 no way to recreate it that day. The docs said "never re-spend to recompute
 something already on disk"; that only holds if the disk is version-controlled.
 
-845 unit tests, 185 doc checks.
+889 unit tests, 185 doc checks.
+
+---
+
+## M22 — the complete run, and why its result was not believed (2026-07-29)
+
+Billing removed the daily quota, so all 110 prompts collected in 483s and
+`should_flip()` returned **`True`** for the first time. It was not flipped.
+
+The eval generated local answers at `--max-tokens 120` while references got
+1024 and the gateway serves 512. So the judge was asked whether a candidate
+matched a reference that was 2.9x longer, **26% of local answers were truncated
+mid-sentence**, and every `reasoning` prompt was — grading that category 0/26,
+dragging the acceptable rate from 85% to 72%, and worsening the base-rate Brier
+from 0.127 to 0.202. Gate `large` "passed" partly by clearing a lower bar.
+
+Refitting on subsets of the same run — free, the cache is on disk — showed the
+verdict was not robust: `False` with `reasoning` excluded, `True` by 0.006 Brier
+with truncated answers excluded. RESEARCH.md §3.6 has the full table.
+
+Fixed:
+
+| | |
+|---|---|
+| `--max-tokens` defaulted to 120 | now `DEFAULT_MAX_TOKENS` — what the gateway serves |
+| a run cache could mix two budgets | `check_budget` refuses; `n_tokens` is a calibrator feature |
+| paid calls recorded no usage | `ApiUsage` per call; the run prints what it cost |
+| the judge was priced at the reference's rate | `EVAL_JUDGE_PRICE_IN`/`_OUT` — a different model bills differently |
+
+The harness tracked tokens precisely for the free local tiers and not at all
+for the calls that cost money, so pricing a run meant estimating from character
+counts afterwards. `ApiUsage` keeps the provider's usage block whole: reasoning
+models bill hidden thinking as output under keys that vary by provider, and a
+fixed schema drops exactly the tokens likeliest to surprise you.
+
+---
+
+## M23 — the calibration passes, and it survives being taken apart (2026-07-29)
+
+Re-ran M22's collection with the two defects fixed: local tiers at
+`--max-tokens 512` (what the gateway serves) and the judge at
+`reasoning_effort=none`.
+
+| gate | n | acceptable | ECE | Brier | base | verdict |
+|---|---|---|---|---|---|---|
+| `small` | 110 | 59% | 0.040 | 0.136 | 0.242 | **PASS** |
+| `large` | 110 | 69% | 0.027 | 0.129 | 0.214 | **PASS** |
+
+`should_flip()` is `True` and **stays** `True` with `reasoning` removed, with
+`code` removed, with truncated references removed, and with capped local
+answers removed. It fails only when both hard categories go at once, leaving 75
+easy prompts — the over-easy distribution that made M6 uninformative. That is
+the expected failure, not a counter-example.
+
+Label coverage went from 96 to 110 per gate with zero unlabelled slots; local
+truncation from 26% to 9%.
+
+**Cost, measured rather than estimated** — 129 calls, in 61,656 / billed out
+31,783. `reasoning_effort=none` gave 2.7 output tokens per verdict with no
+thinking. On the reference, thinking exceeded visible output by 36% and was
+reported *only* as the gap in `total_tokens` — Gemini's OpenAI layer sends no
+`reasoning_tokens` key, so `billable_out` derives it from the arithmetic.
+
+**Provenance shipped with the fit.** `calibrator.json` now records the models,
+token budget, dataset size and judge, and the lifespan refuses to start in
+`calibrated` mode when they disagree with what is configured. A calibrator
+fitted on other models is worse than none: it returns a number in [0, 1] that
+looks exactly like a probability.
+
+**The shipped default stays `raw`** — a portability decision, not a verdict on
+the calibration. See RESEARCH.md §3.7.
+
+Also hardened: `.gitignore` went from `.env` + `.env.local` (exact matches) to
+`.env*`, after a routine `cp .env .env.backup` produced an untracked file
+holding a live API key that `git status` offered to stage.
 
 ---
 
@@ -1070,8 +1144,12 @@ something already on disk"; that only holds if the disk is version-controlled.
 | `SHADOW_SAMPLE_RATE` | `0.0` | Fraction of gate-accepted local answers re-run against the frontier to measure false-cheap. Off by default: it spends real money (D29) |
 | `SHADOW_DIVERGENCE_THRESHOLD` | `0.35` | Token overlap below which a shadow comparison counts as divergent |
 | `EVAL_JUDGE_MAX_TOKENS` | `64` | Eval only. A reasoning judge spends hidden thinking tokens against this; at 10 it returns nothing and every verdict parses as None |
-| `EVAL_REFERENCE_MAX_TOKENS` | `512` | Eval only. Separate from the local tiers' budget — a truncated reference makes the judge compare against a fragment |
+| `EVAL_REFERENCE_MAX_TOKENS` | `1024` | Eval only. Separate from the local tiers' budget — a truncated reference makes the judge compare against a fragment |
 | `EVAL_MIN_CALL_INTERVAL_S` | `0.0` | Eval only. Pace under a rate limit rather than retry through it; Gemini's free tier is 20/min |
+| `EVAL_JUDGE_PRICE_IN` | `2.50` | Eval only. The judge is a different model from the reference (D11), so it bills at different rates. Placeholder — verify |
+| `EVAL_JUDGE_PRICE_OUT` | `10.00` | Eval only. As above. `run_eval` prints what a run cost from provider-reported tokens, at these prices |
+| `EVAL_JUDGE_REASONING_EFFORT` | *(empty)* | Eval only. Passed through when set. `none` disables thinking on gemini-2.5-flash; Gemini 3 has no off switch; Anthropic ignores the field. Empty by default or it would 400 against the default judge |
+| `EVAL_REFERENCE_REASONING_EFFORT` | *(empty)* | Eval only. Leave alone — the reference is the gold standard every label is graded against |
 | `CACHE_SCOPE` | `global` | `global` \| `tenant`. Global shares cached answers across tenants (the savings); tenant isolates them (D28) |
 | `MAX_DAILY_SPEND_USD` | `10.00` | **Armed by default.** The gateway's own daily ceiling across all tenants, bounding the cost of invariant 4. 0 disables |
 | `AUDIT_ENABLED` | `true` | Durable JSONL record of every routing decision, refusals included |

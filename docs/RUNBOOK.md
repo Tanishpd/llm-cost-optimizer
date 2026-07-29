@@ -260,6 +260,7 @@ the GitHub release from the matching `CHANGELOG.md` section.
 | RSS jumped and stopped | An arena CPython does not return to the OS. `scripts/soak.py` distinguishes this from a leak |
 | `tier_attempted` > `requests_by_tier` | Escalation. A request that walked three tiers was attempted by three and served by one |
 | Confidence ~0.5–0.75 on correct answers | Expected for `geo_mean` on a small model. It measures fluency, not correctness ([RESEARCH.md §3.1](RESEARCH.md)) |
-| `x_hlr.confidence_mode: "raw"` | The shipped default. Gate `large` failed calibration; 0.85 has not been earned |
+| `x_hlr.confidence_mode: "raw"` | The shipped default. Calibration passes (§3.7), but the fit is specific to `qwen2.5:0.5b`/`3b` — set `CONFIDENCE_MODE=calibrated` to use it |
+| Refuses to start: "was fitted on X, but this gateway runs Y" | `calibrator.json`'s provenance disagrees with `SMALL_MODEL`/`LARGE_MODEL`. Refit, or set `CONFIDENCE_MODE=raw`. Deliberate: a mismatched calibrator returns numbers that look like probabilities |
 | A tenant getting another's cached answer | `CACHE_SCOPE=global`, the default — that sharing *is* the saving. Set `CACHE_SCOPE=tenant` if isolation matters more (D28) |
 | `text withheld: CACHE_SCOPE=global` in a reason | Working as designed: the match may be another tenant's prompt, so its text is not echoed |

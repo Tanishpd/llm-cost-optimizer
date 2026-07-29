@@ -3,17 +3,23 @@
 An API gateway that sits in front of several models of escalating cost and decides — per request —
 the cheapest one that will actually do the job.
 
-> **Status: M0–M21 complete. The gateway runs, and it's hardened.**
+> **Status: M0–M23 complete. The gateway runs, and it's hardened.**
 > All five tiers, both confidence gates, the eval harness and the dashboard are built and working —
-> **845 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
+> **889 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
 > rate
 > limiting, per-tenant budgets, a durable audit trail, circuit breakers, structured
 > logging and a container image are in. Run
 > `python3 scripts/demo.py` to walk every tier in one go.
 >
-> The one honest caveat: **the gateway ships in `raw` confidence mode, not `calibrated`.** M6 fitted
-> the calibrators and one of the two gates failed its validation, so 0.85 has not been earned yet.
-> That result is in [RESEARCH.md §3.4](docs/RESEARCH.md), not hidden.
+> **The calibration passes**, measured against a real frontier API: both gates clear their
+> validation at n=110, and the result survives every counterfactual refit but one that strips the
+> two hardest categories at once. 0.85 is earned — [RESEARCH.md §3.7](docs/RESEARCH.md).
+>
+> The gateway still **ships in `raw` mode by default**, and that is a portability choice rather than
+> a caveat: the fitted weights describe `qwen2.5:0.5b` / `qwen2.5:3b` specifically, so a default that
+> hard-fails on any model swap would serve nobody. `CONFIDENCE_MODE=calibrated` is one line, and the
+> gateway refuses to start if the calibrator was fitted on models other than the ones configured.
+> The earlier negative result is still in [§3.4](docs/RESEARCH.md), not quietly deleted.
 
 Point any OpenAI-compatible client at it. It answers from cache when it can, tries a 0.5B model
 first, steps up to a 3B when that isn't confident enough, and reaches for the expensive API only
@@ -156,17 +162,29 @@ So the gateway ships in two modes:
   bar is deliberately *higher* (0.92): escalating from it costs ~450 ms and no dollars, so when the
   next tier is nearly free you should use it readily.
 
-**M6 has now run, and the honest outcome is `raw` mode.** Gate 1 passed validation (ECE 0.062,
-Brier better than base rate). **Gate 2 failed** — not on calibration, but on *usefulness*: its ECE
-was actually the better of the two (0.047), because a model that predicts the base rate everywhere
-is trivially well-calibrated and carries no information. Brier-against-baseline is what separates
-"calibrated" from "calibrated and useful", and the 3B's confidence didn't clear it on this sample.
-Shipping one measured gate beside one guessed gate would put both behind the same 0.85 label, so
-the gateway stays in `raw`. Full numbers in [RESEARCH.md §3.4](docs/RESEARCH.md). Full derivation in [docs/RESEARCH.md](docs/RESEARCH.md) §3.
+**Both gates now pass, and it took three runs to get an answer worth trusting.** M6 fitted gate 1
+cleanly and gate 2 failed — not on calibration but on *usefulness*: its ECE was the better of the
+two (0.047), because a model predicting the base rate everywhere is trivially well-calibrated and
+carries no information. Brier-against-baseline is what separates "calibrated" from "calibrated and
+useful" ([§3.4](docs/RESEARCH.md)).
 
-The calibrated path itself is wired and tested even though it isn't the default — flipping
-`CONFIDENCE_MODE` loads `CALIBRATOR_PATH` at startup and **refuses to start** if the fit is missing,
-rather than falling back to raw thresholds while still reporting `calibrated`.
+A later run against a real frontier API appeared to pass both gates — and didn't survive scrutiny.
+The eval was generating local answers at 120 tokens while references got 1024, so the judge was
+comparing candidates against references three times longer, every `reasoning` prompt was truncated,
+and that category graded 0/26. Refitting on subsets showed the verdict flipping depending on which
+defensible slice you took ([§3.6](docs/RESEARCH.md)).
+
+Corrected — local tiers at the length production actually serves — **both gates pass at n=110**
+(`small`: ECE 0.040, Brier 0.136 vs base 0.242; `large`: ECE 0.027, Brier 0.129 vs base 0.214), and
+the result now holds under every counterfactual refit except one that removes both hard categories
+at once. **0.85 is earned** ([§3.7](docs/RESEARCH.md)). Full derivation in
+[docs/RESEARCH.md](docs/RESEARCH.md) §3.
+
+`raw` remains the default for portability, not doubt: the fitted weights describe `qwen2.5:0.5b` /
+`qwen2.5:3b` on this dataset. Flipping `CONFIDENCE_MODE` loads `CALIBRATOR_PATH` at startup and
+**refuses to start** if the fit is missing — or if its recorded provenance names different models
+than the ones configured, since a mismatched calibrator returns numbers that look exactly like
+probabilities and aren't.
 
 **And M0 already found the limit of the raw metric.** Asked when the Treaty of Kadesh was signed
 (really c. 1259 BC, Egypt and the Hittites), `qwen2.5:0.5b` answered *"1956 … between Egypt and
@@ -464,7 +482,7 @@ suite had caught **one of fourteen**.
 
 | Layer | Catches | Blind to |
 |---|---|---|
-| **Unit** (845) | logic inside a module | whether modules are connected |
+| **Unit** (889) | logic inside a module | whether modules are connected |
 | **Wiring** | components not plugged in; settings wired to nothing | anything the real lifespan can't reach |
 | **Rendering** | dashboard JS that doesn't parse, run, or match the DOM | visual layout |
 | **Doc checks** (185) | docs contradicting the code | whether the code is right |

@@ -54,6 +54,7 @@ class FrontierProvider:
         max_tokens: int = 512,
         logprobs: bool = False,  # accepted for Provider conformance; not sent
         top_logprobs: int = 0,
+        reasoning_effort: str = "",
     ) -> Completion:
         payload: dict[str, Any] = {
             "model": model,
@@ -63,6 +64,14 @@ class FrontierProvider:
             "max_tokens": max_tokens,
             "stream": False,
         }
+        # Only sent when asked for. `reasoning_effort` is a standard OpenAI
+        # field, but the values a provider accepts are not standard at all:
+        # Gemini 2.5 Flash takes "none" to disable thinking outright, Gemini 3
+        # dropped that ability entirely (its floor is "low"), and Anthropic
+        # does not use this field. Sending it unconditionally would 400 against
+        # the default judge model.
+        if reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
         started = time.perf_counter()
         try:
             response = await self._client.post(
@@ -112,8 +121,16 @@ class FrontierProvider:
                 fix="Back off and retry",
             )
         if response.status_code >= 400:
+            # Name the likely culprit. Which `reasoning_effort` values a model
+            # accepts varies per model *within* one provider — gemini-2.5-flash
+            # takes "none", gemini-3-* rejects it — so this 400 lands mid-run
+            # with an opaque body and no obvious cause.
+            fix = ("Unset it, or use a value this model accepts "
+                   "(\"none\" works on gemini-2.5-flash; Gemini 3 has no off "
+                   "switch and its floor is \"low\")") if reasoning_effort else ""
             raise ProviderUnavailable(
-                f"frontier {response.status_code}: {_error_message(response)}"
+                f"frontier {response.status_code}: {_error_message(response)}",
+                fix=fix,
             )
 
         data = response.json()

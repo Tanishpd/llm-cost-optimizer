@@ -1166,6 +1166,82 @@ def test_calibrated_mode_without_a_calibrator_file_refuses_to_start(monkeypatch,
         get_settings.cache_clear()
 
 
+def _calibrator_file(tmp_path, provenance):
+    """A minimal but structurally valid calibrator, with provenance."""
+    import json
+
+    from app.confidence import FEATURE_NAMES
+
+    n = len(FEATURE_NAMES)
+    path = tmp_path / "cal.json"
+    path.write_text(json.dumps({
+        "calibrators": {g: {"weights": [0.1] * n, "bias": 0.0,
+                            "mean": [0.0] * n, "scale": [1.0] * n}
+                        for g in ("small", "large")},
+        "validation": {}, "flip_recommended": True, "provenance": provenance,
+    }))
+    return path
+
+
+def test_a_calibrator_fitted_on_other_models_refuses_to_start(monkeypatch, tmp_path):
+    """Worse than no calibrator: these weights map one model's logprob
+    statistics onto P(acceptable). Point them at a different model and they
+    still return a number in [0, 1] that looks exactly like a probability, and
+    nothing downstream can tell. Caught here or never."""
+    from app.config import get_settings
+
+    path = _calibrator_file(tmp_path, {"small_model": "qwen2.5:0.5b",
+                                       "large_model": "qwen2.5:3b"})
+    monkeypatch.setenv("CONFIDENCE_MODE", "calibrated")
+    monkeypatch.setenv("CALIBRATOR_PATH", str(path))
+    monkeypatch.setenv("SMALL_MODEL", "llama3.2:1b")
+    monkeypatch.setenv("WARM_MODELS_ON_STARTUP", "false")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="fitted on qwen2.5:0.5b"):
+            with TestClient(app):
+                pass
+    finally:
+        get_settings.cache_clear()
+
+
+def test_a_matching_calibrator_starts(monkeypatch, tmp_path):
+    """The guard must not fire on the configuration it was fitted for."""
+    from app.config import Settings, get_settings
+
+    defaults = Settings()
+    path = _calibrator_file(tmp_path, {"small_model": defaults.small_model,
+                                       "large_model": defaults.large_model})
+    monkeypatch.setenv("CONFIDENCE_MODE", "calibrated")
+    monkeypatch.setenv("CALIBRATOR_PATH", str(path))
+    monkeypatch.setenv("WARM_MODELS_ON_STARTUP", "false")
+    monkeypatch.setenv("AUDIT_ENABLED", "false")
+    get_settings.cache_clear()
+    try:
+        with TestClient(app):
+            pass
+    finally:
+        get_settings.cache_clear()
+
+
+def test_a_calibrator_without_provenance_still_starts(monkeypatch, tmp_path):
+    """Every fit produced before provenance existed. Refusing to load them all
+    would be worse than saying so — the lifespan logs a warning instead."""
+    from app.config import get_settings
+
+    path = _calibrator_file(tmp_path, {})
+    monkeypatch.setenv("CONFIDENCE_MODE", "calibrated")
+    monkeypatch.setenv("CALIBRATOR_PATH", str(path))
+    monkeypatch.setenv("WARM_MODELS_ON_STARTUP", "false")
+    monkeypatch.setenv("AUDIT_ENABLED", "false")
+    get_settings.cache_clear()
+    try:
+        with TestClient(app):
+            pass
+    finally:
+        get_settings.cache_clear()
+
+
 def test_require_auth_without_keys_refuses_to_start(monkeypatch):
     from app.config import get_settings
 

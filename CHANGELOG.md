@@ -8,6 +8,50 @@ the release workflow refuses to build a tag that disagrees with it.
 
 ## [Unreleased]
 
+### Changed
+
+- **The calibration passes.** Both gates clear validation against a real
+  frontier API at n=110 — `small` ECE 0.040 / Brier 0.136 vs base 0.242,
+  `large` ECE 0.027 / Brier 0.129 vs base 0.214 — and the result survives every
+  counterfactual refit but one that strips the two hardest categories at once.
+  `should_flip()` is `True`; **0.85 is earned**. This supersedes the 0.2.0 note
+  below, which stands as the record of what was true then.
+  [RESEARCH.md §3.7](docs/RESEARCH.md)
+- **`raw` is still the default**, now as a portability choice rather than a
+  verdict: the weights describe `qwen2.5:0.5b` / `qwen2.5:3b` on this dataset,
+  and a default that hard-fails on any model swap serves nobody.
+
+### Added
+
+- **Calibrator provenance.** `calibrator.json` records the models, token
+  budget, dataset size and judge it was fitted with, and the gateway refuses to
+  start in `calibrated` mode when those disagree with the configured models. A
+  calibrator fitted on other models is worse than none — it returns a number in
+  [0, 1] that looks exactly like a probability.
+- **The eval reports what it spent.** `ApiUsage` per paid call, priced with
+  separate judge rates. Thinking tokens are billed as output and Gemini reports
+  them *only* as the gap in `total_tokens`; on the last run they exceeded
+  visible output by 36%.
+- **`EVAL_JUDGE_REASONING_EFFORT`** — `none` disables judge thinking on Gemini
+  2.5, which removes both the cost and the failure mode where hidden thinking
+  consumed the whole token budget and every verdict came back empty.
+
+### Fixed
+
+- **The eval calibrated on answers it would never serve.** `--max-tokens`
+  defaulted to 120 against a gateway serving 512, so 26% of local answers were
+  truncated mid-sentence and judged against references 2.9x longer. It now
+  follows `DEFAULT_MAX_TOKENS`, and `check_budget` refuses to extend a run
+  cache across a change of budget — answer length feeds `n_tokens`, a
+  calibrator feature.
+- **`.gitignore` only matched `.env` and `.env.local` exactly**, so a routine
+  `cp .env .env.backup` left a live API key untracked and fully committable.
+  Now `.env*` with an explicit exception for `.env.example`, plus
+  `scripts/check_secrets.py` in CI — a gitignore fix only protects the
+  filenames somebody thought of, so this checks *content* across every tracked
+  file. GitHub's own secret scanning needs Advanced Security, which a private
+  repo on this plan does not have.
+
 ## [0.2.0] — 2026-07-29
 
 The version that made it operable. 0.1.0 worked; this one can be run by

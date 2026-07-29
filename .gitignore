@@ -8,9 +8,15 @@ venv/
 .ruff_cache/
 .mypy_cache/
 
-# Environment — never commit real keys
-.env
-.env.local
+# Environment — never commit real keys.
+#
+# `.env*`, not `.env` and `.env.local`: those two patterns are exact matches,
+# so anything else — `.env.backup`, `.env.prod`, `.env.old` — was untracked and
+# fully committable. A one-line `cp .env .env.backup` before editing produced
+# exactly that here, and `git status` listed the key as a new file ready to
+# stage. The blanket glob plus explicit exceptions is the only version of this
+# that survives someone taking a backup.
+.env*
 !.env.example
 
 # Eval artifacts: cached API responses may contain prompt/response text,
@@ -20,11 +26,17 @@ venv/
 # Run caches. The auto-graded ones regenerate for free, so they stay out.
 eval/runs/*
 !eval/runs/full.json
-# ...but `full.json` is the paid evidence behind a documented result: real API
-# responses that cost quota, backing RESEARCH.md 3.5. It is 119 KB, contains no
-# credentials, and cannot be recreated without spending again. The docs say
-# "never re-spend to recompute something already on disk" — that only holds if
-# the disk is version-controlled.
+!eval/runs/full-120tok.json
+# ...but the paid runs stay: real API responses that cost quota, backing
+# RESEARCH.md 3.5-3.6. They contain no credentials and cannot be recreated
+# without spending again. The docs say "never re-spend to recompute something
+# already on disk" — that only holds if the disk is version-controlled.
+#
+# `full-120tok.json` is the superseded run: collected with the local tiers
+# capped at 120 tokens against 1024-token references, which is why its labels
+# read the way they do. Kept because it is the evidence for RESEARCH.md 3.6's
+# negative result, and deleting the data behind a conclusion leaves the
+# conclusion unfalsifiable.
 !eval/runs/.gitkeep
 
 # Local state
