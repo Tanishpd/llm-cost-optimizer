@@ -697,6 +697,52 @@ not 30 days, and a leak smaller than measurement noise is invisible.
 
 751 unit tests, 135 doc checks.
 
+### M16 — Release engineering, supply chain, runbook ✅ DONE (2026-07-29)
+
+Items 4, 5 and 7. All three are "how do you operate this", which is why they
+went together.
+
+**One version.** `0.1.0` was hardcoded in `pyproject.toml` *and* in the FastAPI
+constructor — the arrangement that produces a release reporting a version it is
+not. `app/__init__.py::__version__` is now the only source; `check_docs.py`
+asserts the rest agree, and the release workflow refuses a tag that disagrees.
+Verified by setting `pyproject.toml` to `9.9.9` and watching the check fail.
+
+**Pinned dependencies.** `fastapi>=0.115` meant an upstream release could ship
+itself into a container build with no review, and the first anyone knew was a
+behaviour change in production. Now exact pins including transitives, so the
+image is reproducible — which only works if something bumps them, hence
+Dependabot, whose PR *is* the review the ranges skipped. `pip-audit --strict`
+runs in CI, because a pin freezes a CVE in place just as well as it freezes a
+working version. Currently clean.
+
+**A release path.** A Dockerfile that only ever builds in CI is not one: there
+is nothing to deploy and nothing to roll back to. `.github/workflows/release.yml`
+re-runs the full gate on the tag, publishes a digest-addressed image to GHCR,
+and cuts the GitHub release from the matching `CHANGELOG.md` section.
+
+Two details worth keeping. The notes are extracted **by tag**, not "the first
+section" — the first section is `[Unreleased]`, and an earlier version of this
+would have published an empty page. And the job fails when no section matches,
+because a release nobody wrote notes for is a release nobody can review.
+
+**A runbook.** `/healthz` reports problems and says nothing about what to do
+about them; `docs/RUNBOOK.md` is that half. Organised symptom → cause → action,
+because the middle step is the one that gets skipped.
+
+Its opening observation is the one that matters for this system: it is built to
+degrade rather than fail, so **the usual symptom of a serious problem is a
+higher bill, not an outage**. Cost is the alarm, not the aftermath. It also
+names the trap directly — when `spend_ceiling_reached` starts returning 503s, do
+not raise the ceiling to make them stop; the 503s are the symptom and the
+missing local tiers are the fault.
+
+`check_docs.py` now asserts every signal the docs say to alert on has a runbook
+entry. An alert with no next step is a page at 3am and nothing else. Verified by
+deleting an entry and watching it fail.
+
+751 unit tests, 157 doc checks.
+
 ---
 
 ## Configuration surface

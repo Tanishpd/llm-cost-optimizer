@@ -307,7 +307,7 @@ actually found, and noticing that the unit suite caught one of fourteen.
 | **Unit** (751, hermetic) | `pytest -m "not integration"` | Logic inside a module | Whether modules are connected |
 | **Wiring** | `tests/test_wiring.py` | Components not plugged in; settings wired to nothing | Anything the real lifespan cannot reach |
 | **Rendering** | `tests/test_dashboard.py` | JS that does not parse, run, or match the DOM | Visual layout — a bar can be the wrong width and still render |
-| **Doc consistency** (143) | `scripts/check_docs.py` | Docs contradicting the code | Whether the code is right |
+| **Doc consistency** (157) | `scripts/check_docs.py` | Docs contradicting the code | Whether the code is right |
 | **Integration** (10) | `pytest -m integration` | Real models, real Redis, the real OpenAI SDK | Anything needing sustained load |
 | **Load** | `scripts/loadtest.py` | Cost identities under concurrency, duplicate model calls | Correctness of a single request |
 | **Soak** | `scripts/soak.py` | Memory/fd growth, latency drift, counter divergence over time | Anything faster than one sampling window |

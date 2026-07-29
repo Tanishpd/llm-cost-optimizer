@@ -1,0 +1,22 @@
+# Dependencies are pinned exactly (see requirements.txt), which only works if
+# something bumps them. Dependabot opens a PR per update and CI runs the full
+# suite against it — that PR *is* the review the old `>=` ranges skipped.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule: {interval: weekly}
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the routine churn, so a genuine major bump is not buried
+      # under six patch updates.
+      patch-and-minor:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: {interval: monthly}
+
+  - package-ecosystem: docker
+    directory: "/"
+    schedule: {interval: monthly}
