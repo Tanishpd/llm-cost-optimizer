@@ -210,6 +210,10 @@ capability, not availability.
 | Frontier down | Best local answer returned, gate verdict overridden | `degraded: ["frontier_unavailable"]` |
 | Logprobs unavailable | Fall back to `CONFIDENCE_STRATEGY=self_consistency` | `degraded: ["logprobs_unavailable"]` |
 | A tier keeps failing | Breaker opens; requests skip it instead of waiting out the timeout | `short_circuited` in `/healthz` |
+| Tenant over their daily cap | Frontier dropped from the cascade; local tiers serve | `degraded: ["budget_exhausted:<tenant>"]` |
+| Over cap **and** frontier pinned | 402 — the caller removed the fallback themselves | `budget_exhausted` |
+| Redis down, budgets configured | Caps unenforced rather than blocking all spend | `degraded: ["budget_unavailable"]` |
+| Audit writer cannot keep up | Records dropped, never blocking the request | `audit.dropped` in `/healthz` |
 | **Everything down** | 503 `all_tiers_down` | The only real failure |
 
 The interesting one is *frontier down*. The gate said escalate, and escalation is impossible — so the
@@ -283,7 +287,41 @@ both directions: its `usage` block is what gets billed, so it is recorded verbat
 recomputed from our own token counts, and its timeouts are never retried. `FRONTIER_API_KEY` is
 `SecretStr` and never appears in a log line or an `x_hlr` block.
 
-## 9. Extension seams
+## 9. How this is verified
+
+Four layers, each catching something the others structurally cannot. The split
+is not aspirational — it is the result of counting where real defects were
+actually found, and noticing that the unit suite caught one of fourteen.
+
+| Layer | Command | Catches | Blind to |
+|---|---|---|---|
+| **Unit** (709, hermetic) | `pytest -m "not integration"` | Logic inside a module | Whether modules are connected |
+| **Wiring** | `tests/test_wiring.py` | Components not plugged in; settings wired to nothing | Anything the real lifespan cannot reach |
+| **Rendering** | `tests/test_dashboard.py` | JS that does not parse, run, or match the DOM | Visual layout — a bar can be the wrong width and still render |
+| **Doc consistency** (133) | `scripts/check_docs.py` | Docs contradicting the code | Whether the code is right |
+| **Integration** (10) | `pytest -m integration` | Real models, real Redis, the real OpenAI SDK | Anything needing sustained load |
+| **Load** | `scripts/loadtest.py` | Cost identities under concurrency, duplicate model calls | Correctness of a single request |
+
+Two properties are worth naming because they are easy to lose:
+
+**The unit suite is hermetic and stays that way.** CI re-runs it behind a dead
+proxy, so a test that starts reaching the network fails there rather than
+becoming flaky later. Tests that boot the real lifespan point `REDIS_URL` at a
+closed port — attaching to a developer's live Redis once made a test pass in CI
+and fail locally, which is the worst arrangement available.
+
+**Coverage is measured but is not a gate.** It sat at ~95% while
+`CONFIDENCE_MODE=calibrated` was wired to nothing and `DEFAULT_MAX_TOKENS` was
+read by nothing. Every line ran; they just ran disconnected. `test_wiring.py`
+exists because coverage cannot express "and then it is used".
+
+**What is still not tested.** No property-based or mutation testing — nothing
+currently grades whether an assertion would fail if the code were wrong, only
+that the line executed. Concurrency is covered in a few places
+(`test_singleflight.py`, the audit writer's shutdown) but the multi-worker
+verification from M10 was done by hand and is not in CI.
+
+## 10. Extension seams
 
 Each is a place the design expects to change, with the interface already drawn:
 
@@ -297,7 +335,7 @@ Each is a place the design expects to change, with the interface already drawn:
 | Real vector index | `cache/semantic.py` interface | Redis 8 `VADD`/`VSIM`, if ever needed |
 | New backend | `providers/base.Provider` | One new module |
 
-## 10. What the architecture deliberately doesn't do
+## 11. What the architecture deliberately doesn't do
 
 - **No *incremental* streaming.** `stream: true` works, but by buffering the whole cascade and then
   re-emitting the finished answer as SSE. Time-to-first-token is unchanged — the gate can't decide

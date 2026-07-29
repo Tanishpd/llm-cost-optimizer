@@ -567,6 +567,35 @@ closed port.
 
 707 unit tests (was 686), coverage 96%.
 
+**A follow-up pass caught the drift this created**, and one more gap. Correcting
+`DEFAULT_MAX_TOKENS` in code left `docs/API.md` still documenting
+`max_tokens | int | 512` — a constant where a knob now exists, which is the same
+lie as a knob wired to nothing, told from the other end. `check_docs.py` now ties
+that table to `config.py` (133 checks).
+
+Then a fault-injection sweep over the whole gate found one real hole: replacing
+`secrets.compare_digest` with `==` passed all 707 tests. The security posture in
+CLAUDE.md says "never add a comparison that short-circuits" and nothing enforced
+it. Two structural tests now do — asserting the source, because a timing
+measurement would be flaky on a shared runner:
+
+    dashboard SyntaxError                 -> 5 failed
+    calibrators un-wired                  -> 1 failed
+    a setting wired to nothing            -> 3 failed
+    geo_mean -> sequence probability      -> 15 failed
+    cache key drops temperature           -> 3 failed
+    cache key drops the system prompt     -> 1 failed
+    budget check inverted                 -> 7 failed
+    compare_digest -> ==                  -> 1 failed  (was: not caught)
+    loop breaks on first key match        -> 1 failed  (was: not caught)
+
+One of those injections was my own mistake worth recording: the first
+"cache key drops temperature" attempt edited a docstring, so the pass it
+produced meant nothing. An injection that does not change behaviour proves
+nothing about the tests.
+
+709 unit tests, 133 doc checks.
+
 ---
 
 ## Configuration surface

@@ -222,3 +222,69 @@ def test_nonpositive_max_tokens_becomes_the_cap():
     limits = RequestLimits(max_output_tokens=100)
     assert limits.clamp_output_tokens(0) == (100, True)
     assert limits.clamp_output_tokens(-5) == (100, True)
+
+
+# --------------------------------------------------------------------------
+# the constant-time invariant
+#
+# Structural rather than behavioural, deliberately. Replacing
+# `secrets.compare_digest` with `==` is functionally identical — every
+# behavioural test still passes — and reintroduces the timing side channel that
+# lets an attacker recover a key one byte at a time. A timing *measurement*
+# would be flaky on a shared CI runner, so the source is asserted instead.
+#
+# Verified as load-bearing: swapping in `==` fails these and nothing else in
+# the suite.
+# --------------------------------------------------------------------------
+
+
+def test_key_comparison_is_constant_time():
+    import ast
+    import inspect
+    import textwrap
+
+    import app.security as security
+
+    # dedent, not cleandoc: a method's source arrives indented, and cleandoc
+    # only normalises docstrings.
+    tree = ast.parse(textwrap.dedent(inspect.getsource(security.ApiKeyAuth.check)))
+
+    calls = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert "compare_digest" in calls, (
+        "ApiKeyAuth.check no longer uses secrets.compare_digest — key "
+        "comparison must be constant time (CLAUDE.md, security posture)"
+    )
+
+    # And no `==` against the presented key, which would short-circuit.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare) and any(
+            isinstance(op, ast.Eq | ast.NotEq) for op in node.ops
+        ):
+            names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+            assert "presented" not in names, (
+                "the presented key is compared with == somewhere in check(); "
+                "that short-circuits on the first differing byte"
+            )
+
+
+def test_the_loop_does_not_short_circuit_on_a_match():
+    """`check()` compares against every configured key even after one matches.
+
+    Returning early would leak, through timing, *which* key matched — and with
+    tenants that maps a caller to an account.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    import app.security as security
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(security.ApiKeyAuth.check)))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.For):
+            has_break = any(isinstance(n, ast.Break) for n in ast.walk(node))
+            assert not has_break, "the key-comparison loop breaks on first match"
