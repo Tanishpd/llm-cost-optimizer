@@ -220,6 +220,7 @@ every judgment call toward missing.
 | Timeouts, retries, breakers | `app/resilience.py` — wraps any awaitable; knows nothing about tiers |
 | Log format / trace id | `app/logging_setup.py` |
 | Prove the docs still match | `scripts/check_docs.py` — add a check when you add an invariant |
+| Prove no credential is committed | `scripts/check_secrets.py` — runs in CI; GitHub's own scanning needs Advanced Security, which this repo has not got |
 | Prove the dashboard still works | `tests/test_dashboard.py` — parses *and executes* its JS |
 | Prove a new setting does something | `tests/test_wiring.py` — every knob is tested or declared inert |
 | Prove it survives load | `scripts/loadtest.py` — asserts cost identities, not just latency |
@@ -321,7 +322,7 @@ which is worse than shared but far better than none.
 
 **M0–M23 complete (2026-07-29).** The gateway runs and is hardened: all five tiers, both gates, eval
 harness, dashboard, auth, shared rate limiting, circuit breakers, structured logging, container
-image, streaming, per-tenant budgets, a durable audit trail. **872 unit + 10 integration
+image, streaming, per-tenant budgets, a durable audit trail. **889 unit + 10 integration
 tests** at 96% coverage, 185 doc-consistency checks. `python3 scripts/demo.py`
 walks every tier.
 

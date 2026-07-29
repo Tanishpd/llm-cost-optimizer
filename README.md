@@ -5,7 +5,7 @@ the cheapest one that will actually do the job.
 
 > **Status: M0–M23 complete. The gateway runs, and it's hardened.**
 > All five tiers, both confidence gates, the eval harness and the dashboard are built and working —
-> **872 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
+> **889 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
 > rate
 > limiting, per-tenant budgets, a durable audit trail, circuit breakers, structured
 > logging and a container image are in. Run
@@ -482,7 +482,7 @@ suite had caught **one of fourteen**.
 
 | Layer | Catches | Blind to |
 |---|---|---|
-| **Unit** (872) | logic inside a module | whether modules are connected |
+| **Unit** (889) | logic inside a module | whether modules are connected |
 | **Wiring** | components not plugged in; settings wired to nothing | anything the real lifespan can't reach |
 | **Rendering** | dashboard JS that doesn't parse, run, or match the DOM | visual layout |
 | **Doc checks** (185) | docs contradicting the code | whether the code is right |

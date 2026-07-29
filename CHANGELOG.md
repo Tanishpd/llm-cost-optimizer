@@ -46,7 +46,11 @@ the release workflow refuses to build a tag that disagrees with it.
   calibrator feature.
 - **`.gitignore` only matched `.env` and `.env.local` exactly**, so a routine
   `cp .env .env.backup` left a live API key untracked and fully committable.
-  Now `.env*` with an explicit exception for `.env.example`.
+  Now `.env*` with an explicit exception for `.env.example`, plus
+  `scripts/check_secrets.py` in CI — a gitignore fix only protects the
+  filenames somebody thought of, so this checks *content* across every tracked
+  file. GitHub's own secret scanning needs Advanced Security, which a private
+  repo on this plan does not have.
 
 ## [0.2.0] — 2026-07-29
 
