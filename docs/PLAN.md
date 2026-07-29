@@ -596,6 +596,107 @@ nothing about the tests.
 
 709 unit tests, 133 doc checks.
 
+### M14 — A spend ceiling that ships armed ✅ DONE (2026-07-28)
+
+The blocking item on the production list, found by measuring rather than
+listing best practices:
+
+    DEFAULT_DAILY_BUDGET_USD = 0   (unlimited)
+    TENANTS                  = {}  (none)
+    RATE_LIMIT_PER_MINUTE    = 60
+
+    Ollama dies -> invariant 4 sends every request to the frontier
+      ~$0.0016/req x 60/min x 24h = $138/day, PER CLIENT
+
+The safety behaviour and the expensive behaviour are the same behaviour.
+Per-tenant budgets could already bound it and default to unlimited, so the
+protection was present and unarmed — the worst state for a control, because it
+looks handled in the code and in the docs and stops nothing.
+
+`MAX_DAILY_SPEND_USD` defaults to $10 and **ships armed**. The asymmetry with
+per-tenant budgets is deliberate: a tenant budget is a business policy, this is
+a safety limit, and a safety limit that defaults to off is how you learn about
+it from an invoice (D27).
+
+Verified with Ollama pointed at a dead port and the ceiling at $0.0006:
+
+    req 1-3   200  tier=frontier          (invariant 4, as designed)
+    req 4-5   503  spend_ceiling_reached  (bounded)
+    spent     $0.000624 against $0.0006 — one request's overshoot
+
+The new tests caught a bug in the change itself: when the ceiling binds,
+`verdict` describes the `__all__` pseudo-bucket, and using `verdict.tenant` to
+record spend would have attributed real money to a fake account *and*
+double-counted it. Attribution now always uses `tenant_name`.
+
+Stated rather than oversold: a daily ceiling is blunt. It bounds damage rather
+than detecting the anomaly, and only after the money is spent. A breaker on the
+*rate* of frontier escalations is the sharper instrument and is recorded as
+D27's revisit condition.
+
+### M15 — Observability and endurance ✅ DONE (2026-07-29)
+
+Items 2 and 3 of the production list. They pair: the soak test is what you
+point the scraper at.
+
+**Prometheus.** `/metrics` returned custom JSON under a name the ecosystem
+reserves for exposition format — the first thing anyone deploying does is point
+a scraper at it and get a parse error. It now **negotiates**: `Accept:
+text/plain` (what every scraper sends) gets exposition, anything else —
+including curl's bare `*/*` — keeps the JSON the dashboard consumes.
+`/metrics/prometheus` is unconditional, for the human who will not think about
+Accept headers.
+
+`app/prometheus.py` is a pure renderer, so the format's silent failure modes
+are testable: a redeclared `# TYPE` makes Prometheus *drop* the series, an
+unescaped quote truncates a line, a missing trailing newline can lose the last
+sample. All three are asserted, and the registry raises on a duplicate rather
+than emitting a metric that vanishes.
+
+Health comes from the same `_health_snapshot` `/healthz` uses — two health
+checks that could disagree would be worse than one. Breaker state is exported
+numerically because Prometheus cannot alert on the string `"open"`.
+
+**Soak.** `loadtest.py` runs 500 requests in seven seconds; every bug it can
+find is a concurrency bug. `scripts/soak.py` asks the other question — is it
+still the same process an hour later — and found three bugs on its first run,
+all in itself:
+
+    3 rps against RATE_LIMIT_PER_MINUTE=60 -> 684 "failures"
+      ...which were 429s. The limiter working, counted as breakage.
+    RSS "grew 40.9%"
+      ...on a 20 MB heap, which is ordinary allocator movement.
+    KeyError: 'tiers' at the end
+      ...because the final /metrics probe was rate-limited too.
+
+Fixed: 429 is its own category, the probe retries, and memory is judged on
+medians of thirds rather than single windows.
+
+Then the interesting one. An 8-minute run showed RSS flat at 32 MB for seven
+minutes, one jump to 66 MB, then flat again — and the fixed check reported that
+as "stable", because the absolute growth was under its floor. Trading a false
+positive for a false negative is not an improvement. Watched for a further
+minute under no load it stayed at exactly 72.1 MB, and a later run came back
+down to 40.7 MB: transient allocation, not a leak.
+
+So the check now reports the **shape** rather than a ratio, because the two
+failure modes are different questions:
+
+    still climbing at the end  -> FAIL, that is a leak
+    jumped once and plateaued  -> WARN, not a leak, but size the host for
+                                  the peak rather than the median
+
+Measured, 8 minutes at 0.8 rps:
+
+    381 requests, 12 windows, 0 failed
+    RSS   32.0 -> 49.2 MB (peak 65.7)      fds 69 -> 68
+    p95   15ms -> 15ms                     counters reconcile
+
+The script states its own limit rather than implying otherwise: 30 minutes is
+not 30 days, and a leak smaller than measurement noise is invisible.
+
+751 unit tests, 135 doc checks.
+
 ---
 
 ## Configuration surface

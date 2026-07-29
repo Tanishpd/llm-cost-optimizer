@@ -198,6 +198,8 @@ every judgment call toward missing.
 | Prove the dashboard still works | `tests/test_dashboard.py` — parses *and executes* its JS |
 | Prove a new setting does something | `tests/test_wiring.py` — every knob is tested or declared inert |
 | Prove it survives load | `scripts/loadtest.py` — asserts cost identities, not just latency |
+| Prove it survives *time* | `scripts/soak.py` — memory, fds, latency drift; distinguishes a leak from a step |
+| Export metrics to a scraper | `app/prometheus.py` — pure renderer; `/metrics` negotiates on `Accept` |
 
 ## Extending
 
@@ -278,10 +280,10 @@ which is worse than shared but far better than none.
 
 ## Current state
 
-**M0–M13 complete (2026-07-28).** The gateway runs and is hardened: all five tiers, both gates, eval
+**M0–M15 complete (2026-07-29).** The gateway runs and is hardened: all five tiers, both gates, eval
 harness, dashboard, auth, shared rate limiting, circuit breakers, structured logging, container
-image, streaming, per-tenant budgets, a durable audit trail. **718 unit + 10 integration
-tests** at 96% coverage, 133 doc-consistency checks. `python3 scripts/demo.py`
+image, streaming, per-tenant budgets, a durable audit trail. **751 unit + 10 integration
+tests** at 96% coverage, 143 doc-consistency checks. `python3 scripts/demo.py`
 walks every tier.
 
 **Shipping in `raw` confidence mode, not `calibrated`** — M6 fitted both calibrators and gate

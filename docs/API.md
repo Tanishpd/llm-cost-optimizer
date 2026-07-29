@@ -480,6 +480,49 @@ savings are counted", and D13).
 
 ---
 
+## GET /metrics/prometheus
+
+Prometheus exposition format, unconditionally. Authenticated like `/metrics` —
+it carries cost data, and making it public so scraping is easier would be the
+wrong trade. Scrapers send a bearer token.
+
+```
+# HELP hlr_cost_saved_usd_total baseline_cost_usd_total minus cost_usd_total.
+# TYPE hlr_cost_saved_usd_total counter
+hlr_cost_saved_usd_total 1.07
+# HELP hlr_requests_by_tier_total Requests served, by the tier that answered.
+# TYPE hlr_requests_by_tier_total counter
+hlr_requests_by_tier_total{tier="local_small"} 30
+hlr_requests_by_tier_total{tier="frontier"} 12
+# HELP hlr_circuit_state Circuit breaker: 0 closed, 1 half-open, 2 open, -1 unknown.
+# TYPE hlr_circuit_state gauge
+hlr_circuit_state{tier="frontier"} 2
+```
+
+**`GET /metrics` also negotiates.** `/metrics` is the name the ecosystem
+reserves for exposition format, and this endpoint has always served JSON for
+the dashboard. Both stay true: send `Accept: text/plain` (which every
+Prometheus scraper does) and you get exposition; send anything else — including
+curl's bare `*/*` — and you get the JSON. This endpoint exists for the human
+who would rather not think about Accept headers.
+
+The series worth alerting on:
+
+| Series | Alert when |
+|---|---|
+| `hlr_budgets_enforced` | `0` — caps are configured and **not being applied** |
+| `hlr_tenant_budget_enforced{tenant=}` | `0` — same, per tenant |
+| `hlr_audit_dropped_total` | increasing — the audit trail has holes |
+| `hlr_circuit_state{tier=}` | `2` — that tier is out |
+| `hlr_dependency_up{dependency=}` | `0` |
+| `hlr_tier_attempted_total{tier="frontier"}` | rate spikes — the signature of a local-tier outage, and of spend |
+
+`hlr_tier_attempted_total` exceeds `hlr_requests_by_tier_total` for any tier
+that escalated: a request that walked 0.5B → 3B → frontier was *attempted* by
+three tiers and *served* by one. The gap between them is the escalation cost.
+
+---
+
 ## GET /healthz
 
 `200` when the gateway can serve at all — **not** when everything is perfect. Invariant 4 is degrade,
