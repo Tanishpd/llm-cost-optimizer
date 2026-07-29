@@ -202,273 +202,34 @@ That's a measured false-cheap at the shipped default, written up in
 threshold: tuning 0.55 upward to exclude one example would fit to that example and leave the actual
 problem intact.
 
-## Constraints this was built under
-
-This machine has **8 GB of RAM**, which is a more interesting constraint than it sounds:
-
-- **RAM caps model size, and you can't buy your way out of it with disk.** A 7B model needs an
-  estimated ~4.8 GB resident and would thrash. `mistral:7b` from the original spec is out for this
-  reason. The practical ceiling is 3B–4B — which is why the design spends its RAM on a *two-model
-  cascade* rather than one bigger model: two gates let the gateway decide how much compute a prompt
-  deserves, not just "local or not". The 0.5B earns its place: at the shipped threshold gate 1
-  escalates only 15% of the eval set, so the cheapest tier serves most traffic. D1's reversal
-  condition was gate 1 accepting <10% — it accepts 85% ([D1](docs/DECISIONS.md)).
-- **No PyTorch, no `transformers`, no `sentence-transformers`.** Ollama already serves embeddings
-  over HTTP; a second inference runtime would compete for the same scarce memory. The Python side is
-  numpy-only at runtime.
-- **Redis 7.2.7 with no modules** — no vector index available. Semantic search is brute-force cosine
-  in numpy: an estimated sub-millisecond up to ~10k cached entries, a few milliseconds at 100k, which
-  is where an index would start to pay. A demo cache won't approach either.
-- **No Docker daemon on the dev machine.** So everything runs as local processes here, and nothing in
-  the codebase may *require* a container. A `Dockerfile` and `docker-compose.yml` ship anyway for
-  deployment, built and smoke-tested in CI rather than locally — see [Containers](#containers).
-
-Total footprint: ~2.6 GB of models plus ~300 MB of Python dependencies.
-
 ## Getting started
 
-**Prerequisites:** Ollama, Redis, Python 3.14+.
-
 ```bash
-# 1. Services
-ollama serve &
-brew services start redis
-
-# 2. Models (~2.6 GB on disk; the two chat models are ~2.7 GB resident when
-#    loaded, the embedder ~0.3 GB more — OLLAMA_MAX_LOADED_MODELS=2 keeps at
-#    most two in RAM)
-ollama pull qwen2.5:0.5b
-ollama pull qwen2.5:3b
-ollama pull nomic-embed-text
-
-# 3. Python
+ollama serve & brew services start redis
+ollama pull qwen2.5:0.5b && ollama pull qwen2.5:3b && ollama pull nomic-embed-text
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt          # to run the gateway
-# pip install -r requirements-dev.txt    # to run the tests as well
-cp .env.example .env
-
-# 4. Verify the environment before building on it — checks models, disk, RAM, and logprobs
-python3 scripts/preflight.py
-
-# 5. Run
+pip install -r requirements.txt && cp .env.example .env
+python3 scripts/preflight.py                 # verifies models, RAM, disk, logprobs
 uvicorn app.main:app --port 8000 &
 uvicorn mock_frontier.main:app --port 8001 &
-python3 scripts/demo.py
+python3 scripts/demo.py                      # walks all five tiers
 ```
 
 Then open <http://localhost:8000/dashboard>.
 
-### Try each tier
+Full instructions, including the 8 GB constraints this was designed around:
+**[docs/SETUP.md](docs/SETUP.md)**.
 
-`scripts/demo.py` walks all five in one run. By hand:
+## Guides
 
-```bash
-H='content-type: application/json'
-Q='{"model":"gateway","messages":[{"role":"user","content":"What is the capital of France?"}]}'
-
-curl -s localhost:8000/v1/chat/completions -H "$H" -d "$Q" | jq .x_hlr   # → local_small
-curl -s localhost:8000/v1/chat/completions -H "$H" -d "$Q" | jq .x_hlr   # → cache_exact
-
-# reworded — same question, different words
-curl -s localhost:8000/v1/chat/completions -H "$H" \
-  -d '{"model":"gateway","messages":[{"role":"user","content":"Tell me France'\''s capital city."}]}' | jq .x_hlr
-# → cache_semantic
-
-# the 0.5B should hesitate here; the 3B picks it up
-curl -s localhost:8000/v1/chat/completions -H "$H" \
-  -d '{"model":"gateway","messages":[{"role":"user","content":"Explain why a rainbow has the colour order it does."}]}' | jq .x_hlr
-# → local_large
-
-# neither local model confident
-curl -s localhost:8000/v1/chat/completions -H "$H" \
-  -d '{"model":"gateway","messages":[{"role":"user","content":"Prove that every finite integral domain is a field."}]}' | jq .x_hlr
-# → frontier
-```
-
-## The expensive tier
-
-By default it's a local mock on `:8001` speaking genuine OpenAI `/v1/chat/completions` JSON —
-including the `usage` block — with configurable latency and per-token pricing, so the cost math is
-realistic without spending anything.
-
-The envelope is faithful; the *content* is canned. The mock proves the escalation path and the
-accounting, not answer quality — that's what the eval harness needs a real API for.
-
-Because the gateway talks to it over real HTTP, switching to a live provider is configuration only:
-
-```bash
-FRONTIER_BASE_URL=https://api.openai.com/v1
-FRONTIER_API_KEY=sk-...
-FRONTIER_MODEL=gpt-4o
-FRONTIER_PRICE_IN=2.50      # verify current rates — defaults are placeholders
-FRONTIER_PRICE_OUT=10.00
-```
-
-No code changes.
-
-**One step does cost money:** the eval harness (M6) calls a real API for reference answers and a
-judge model for quality scoring. Of the 110 prompts, 67 are auto-gradable and cost nothing;
-only the 43 judged ones call out, at 3 calls each — **129 calls total**. Compute the cost
-from your actual rates before running; the price constants are placeholders. Every response is cached
-under `eval/runs/` so re-fitting calibrators never re-spends.
-
-## Running it for real
-
-### Authentication
-
-Set `GATEWAY_API_KEYS` to a comma-separated list and every request needs one, as either
-`Authorization: Bearer <key>` or `X-API-Key: <key>`. Comparison is constant-time; logs carry a short
-digest of the principal, never the key.
-
-```bash
-GATEWAY_API_KEYS=sk-local-abc123,sk-local-def456
-REQUIRE_AUTH=true          # refuse to start if the list above is empty
-```
-
-Leave the list empty and **the gateway runs open**, logging a loud warning at startup. That's the
-right default for the single-user quickstart and the wrong one for anything reachable — which is what
-`REQUIRE_AUTH` is for: it turns a silent misconfiguration into a startup failure. `/livez`, `/readyz`
-and `/healthz` stay public so an orchestrator can probe without a credential
-([D17](docs/DECISIONS.md)).
-
-### Limits
-
-Each is enforced in middleware, before any model is touched.
-
-| Setting | Default | Exceeded → |
-|---|---|---|
-| `MAX_BODY_BYTES` | 256000 | `413` |
-| `MAX_PROMPT_CHARS` | 32000 | `413` |
-| `MAX_MESSAGES` | 50 | `413` |
-| `RATE_LIMIT_PER_MINUTE` | 60 | `429` + `Retry-After` |
-| `MAX_OUTPUT_TOKENS` | 4096 | clamped, reported in `x_hlr.degraded` |
-
-The rate-limit window lives in a Redis sorted set behind a Lua script, so the cap is shared across
-workers rather than multiplied by them. If Redis is unreachable it degrades to per-process counting
-and says so in `/healthz` ([D18](docs/DECISIONS.md)).
-
-### Tenants and budgets
-
-A key authenticates; a **tenant** pays. Set `TENANTS` and each account gets its own daily cap and its
-own line in `/metrics`:
-
-```bash
-GATEWAY_API_KEYS=sk-acme-1,sk-globex-1
-TENANTS='{"acme":   {"keys": ["sk-acme-1"],   "daily_budget_usd": "5.00"},
-          "globex": {"keys": ["sk-globex-1"], "daily_budget_usd": "1.00"}}'
-```
-
-**Over budget degrades, it does not reject** — and that is the whole point. If most prompts don't
-need the expensive model, then running out of money for the expensive model shouldn't stop you being
-served. The frontier drops out of the cascade and the local tiers carry on:
-
-```
-tier      local_large
-path      ['local_large']
-degraded  ['budget_exhausted:acme']
-reason    daily budget exhausted: $0.000628 of $0.000500 spent today (UTC);
-          frontier tier withheld, so: served by local_large: confidence 0.78 …
-```
-
-It also makes the cap safe to set aggressively: if exhaustion meant 402s you'd set it high enough
-never to bind, which defeats the point ([D23](docs/DECISIONS.md)).
-
-Two things stated rather than glossed. **The cap is approximate by exactly one request** — cost isn't
-knowable until the provider replies, so the budget is read before the call and recorded after; the
-overshoot is bounded by `MAX_OUTPUT_TOKENS × FRONTIER_PRICE_OUT`, ~$0.04 at the defaults, and startup
-logs the number. **If Redis is down, budgets aren't enforced** — failing closed would turn a cache
-blip into a total frontier outage, so it fails open and says so in four places
-([D24](docs/DECISIONS.md), [D25](docs/DECISIONS.md)).
-
-**The gateway also caps itself.** `MAX_DAILY_SPEND_USD` (default **$10**) bounds spend across every
-tenant, and unlike the per-tenant budgets it ships *armed*. It exists because invariant 4 — *"Ollama
-down → escalate everything"* — is correct for availability and costs about **$138/day per client** at
-the shipped rate limit. A business policy may default to off; a safety limit may not
-([D27](docs/DECISIONS.md)).
-
-Measured, with Ollama pointed at a dead port and the ceiling set to $0.0006:
-
-```
-req 1-3   200  tier=frontier          (invariant 4, working as designed)
-req 4-5   503  spend_ceiling_reached  (bounded)
-spent     $0.000624 against a $0.0006 ceiling — one request's overshoot
-```
-
-**Caches are shared across tenants by default** — that sharing is where the savings come from, since
-the second tenant to ask a common question pays nothing. The cost is that a semantic hit can match
-another tenant's entry, so the reason string withholds the matched text in that mode.
-`CACHE_SCOPE=tenant` isolates both caches instead, trading the cross-tenant saving for isolation
-([D28](docs/DECISIONS.md)).
-
-### Audit trail
-
-One JSON line per request in `AUDIT_PATH`, **including refusals**, durable across restarts:
-
-```json
-{"ts": 1785258422.7, "trace_id": "b6ee310fb7af", "tenant": "acme", "principal": "777a832b78f0",
- "tier": "local_large", "path": ["local_large"], "cost_micro_usd": 0,
- "degraded": ["budget_exhausted:acme"], "gates": [...]}
-```
-
-This is the thing `/metrics/recent` can't be: that reads a Redis stream capped at 10k entries and
-answers *what is happening now*. This answers *why did request `abc123` cost $0.04 last Tuesday*.
-
-`principal` is a digest — the raw key is never written. Writes are queued and drained by a background
-task so the request path never waits on a disk; a full queue drops rather than blocking, and
-`/healthz` reports the count, because a trail with unreported holes is worse than no trail
-([D26](docs/DECISIONS.md)).
-
-### Health
-
-| | Answers | Use for |
-|---|---|---|
-| `GET /livez` | is the process alive | container healthcheck, restart policy |
-| `GET /readyz` | can it serve — Ollama and at least one model reachable | load-balancer admission |
-| `GET /healthz` | full dependency detail, degraded modes, breaker states | humans and debugging |
-
-`/livez` deliberately does **not** test Redis or Ollama: a liveness probe that fails during a Redis
-blip converts a degradation into a restart loop.
-
-### Resilience
-
-Each tier sits behind a circuit breaker. After `BREAKER_FAILURE_THRESHOLD` consecutive failures it opens and
-requests skip straight past — measured against a frontier that accepts connections and never replies,
-at a 3 s timeout: **3193 ms → 42 ms**. One probe is admitted per cooldown to detect recovery.
-
-Retries cover timeouts and connection errors only, with full jitter, and the frontier is **not**
-retried on timeout — those tokens may already be billed ([D20](docs/DECISIONS.md)).
-
-Set `LOG_FORMAT=json` for structured logs; every line carries the request's trace id.
-
-### Containers
-
-```bash
-ollama serve &                 # on the HOST — not a compose service
-docker compose up --build
-```
-
-Ollama stays outside the compose network on purpose: it needs the host's GPU/Metal, and bundling it
-would silently give you CPU-only inference ([D21](docs/DECISIONS.md)). The gateway image is
-multi-stage and runs as a non-root uid.
-
-### Load
-
-```bash
-python3 scripts/loadtest.py --concurrency 48 --requests 500
-```
-
-Not a benchmark — it asserts things a smoke test can't: that nothing *fails* under concurrency, that
-the cost identities still reconcile after hundreds of requests, and that single-flight actually
-collapses duplicates.
-
-```
-500 req @ concurrency 48   500/500 ok   75 req/s   18 model calls for 8 distinct prompts
-p50 28ms   p95 2069ms   p99 4853ms      worker RSS 10 MB
-```
-
-Its first run found a real bug: per-request costs were rounded to whole micro-USD *before* summing,
-so a documented `/metrics` identity was off by 75 micro-USD over 200 requests. Aggregates now derive
-from exactly-summed integer token counters.
+| | |
+|---|---|
+| **[SETUP.md](docs/SETUP.md)** | Install it, and whether your machine can host it |
+| **[RUNNING.md](docs/RUNNING.md)** | Start it, point it at a real provider, containers, health, load |
+| **[USAGE.md](docs/USAGE.md)** | Call it: auth, tenants, budgets, rate limits, streaming, the audit trail |
+| **[API.md](docs/API.md)** | The exact HTTP contract — every field and error code |
+| **[RUNBOOK.md](docs/RUNBOOK.md)** | When it misbehaves, organised by symptom |
+| **[CONTRIBUTING.md](CONTRIBUTING.md)** | The development loop and what CI checks |
 
 ## How it's tested
 
@@ -478,7 +239,7 @@ commands belong to, and what CI will check that they do not.
 ```bash
 .venv/bin/python -m pytest -m "not integration"   # 903, hermetic — needs nothing running
 .venv/bin/ruff check app eval scripts mock_frontier tests
-.venv/bin/python scripts/check_docs.py            # 192 cross-document checks
+.venv/bin/python scripts/check_docs.py            # 200 cross-document checks
 ```
 
 Six layers, split by what each can and cannot see. The split isn't aspirational —
@@ -490,7 +251,7 @@ suite had caught **one of fourteen**.
 | **Unit** (903) | logic inside a module | whether modules are connected |
 | **Wiring** | components not plugged in; settings wired to nothing | anything the real lifespan can't reach |
 | **Rendering** | dashboard JS that doesn't parse, run, or match the DOM | visual layout |
-| **Doc checks** (192) | docs contradicting the code | whether the code is right |
+| **Doc checks** (200) | docs contradicting the code | whether the code is right |
 | **Integration** (10) | real models, real Redis, the real OpenAI SDK | sustained load |
 | **Load** | cost identities under concurrency | correctness of one request |
 | **Soak** | memory/fd growth, latency drift over time | anything faster than a window |
@@ -561,46 +322,12 @@ Three things stated rather than glossed:
   rate reads 100%. Startup warns loudly if you point it at the mock — verified, because that
   misconfiguration looks exactly like a catastrophic gate ([D29](docs/DECISIONS.md)).
 
-### Metrics for a scraper
+### Metrics and endurance
 
-`/metrics` negotiates: `Accept: text/plain` (what every Prometheus scraper sends) gets exposition
-format, anything else — including curl's bare `*/*` — keeps the JSON the dashboard consumes.
-`/metrics/prometheus` always serves exposition, for the human who would rather not think about
-Accept headers.
-
-```
-hlr_cost_saved_usd_total 1.07
-hlr_requests_by_tier_total{tier="local_small"} 30
-hlr_circuit_state{tier="frontier"} 2
-hlr_budgets_enforced 0
-```
-
-The last one is the alertable one: caps are configured and **not being applied**, so spend is
-uncapped right now. Full series list and what to alert on: [API.md](docs/API.md).
-
-### Endurance
-
-```bash
-python3 scripts/soak.py --minutes 30 --rps 2
-```
-
-`loadtest.py` answers *"does it survive 500 requests at concurrency 48"* in seven seconds — every bug
-it can find is a concurrency bug. This answers *"is it still the same process an hour later"*, which
-is where leaks, fd exhaustion and latency drift live. An 8-minute run:
-
-```
-381 requests, 12 windows
-  ok    no request failed
-  ok    RSS stable — 32.0 -> 49.2 MB (peak 65.7 MB)
-  ok    file descriptors stable (69 -> 68)
-  ok    p95 steady (15ms -> 15ms)
-  ok    served counts still reconcile
-```
-
-It distinguishes **a leak** (still climbing at the end) from **a step** (jumps once, then plateaus —
-an arena CPython never returns to the OS). The first is a failure; the second is a warning that your
-working set is the larger number. And it says plainly what it cannot tell you: 30 minutes is not 30
-days.
+`/metrics` negotiates on `Accept` and speaks Prometheus. `scripts/soak.py`
+watches memory, file descriptors and latency drift over a long run, and
+distinguishes a leak from a step. Both are covered in
+[RUNNING.md](docs/RUNNING.md).
 
 ### Running the calibration
 
@@ -675,7 +402,7 @@ $ .venv/bin/python scripts/preflight.py
   ✓ redis reachable, no modules (brute-force cosine, as designed)
 
 $ .venv/bin/python scripts/check_docs.py
-  all 192 checks passed
+  all 200 checks passed
 ```
 
 The 10 integration tests need a live Ollama — one also needs the `openai` SDK, because a
@@ -686,8 +413,12 @@ in CI; the unit suite is hermetic and is re-run behind a dead proxy to keep it t
 
 | Document | What's in it |
 |---|---|
+| **[docs/SETUP.md](docs/SETUP.md)** | Install it, and whether your machine can host it |
+| **[docs/RUNNING.md](docs/RUNNING.md)** | Start it, real providers, containers, multi-worker, health, load |
+| **[docs/USAGE.md](docs/USAGE.md)** | Call it — auth, tenants, budgets, rate limits, streaming, audit |
+| **[CONTRIBUTING.md](CONTRIBUTING.md)** | The development loop, and what CI checks |
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | How it's put together — lifecycle, components, state, failure model, seams |
-| **[docs/PLAN.md](docs/PLAN.md)** | Milestones M0–M13, config surface, Redis schema, verification commands |
+| **[docs/PLAN.md](docs/PLAN.md)** | Milestones M0–M25, config surface, Redis schema, verification commands |
 | **[docs/API.md](docs/API.md)** | The HTTP contract — endpoints, the `x_hlr` block, error shapes, cost math |
 | **[docs/DECISIONS.md](docs/DECISIONS.md)** | Why it's built this way, what was rejected, what would change each call |
 | **[docs/RUNBOOK.md](docs/RUNBOOK.md)** | What to do when something is wrong — symptom, cause, action |
