@@ -113,7 +113,7 @@ class Settings(BaseSettings):
     #
     # Local tiers must stay at the length production would generate; that is
     # what is being calibrated. Only the reference needs the headroom.
-    eval_reference_max_tokens: int = 512
+    eval_reference_max_tokens: int = 1024
     # Seconds to wait between eval API calls. 0 = as fast as the provider
     # allows, which is right for a paid tier.
     #

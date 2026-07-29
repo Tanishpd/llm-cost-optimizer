@@ -88,8 +88,16 @@ class FrontierProvider:
                 "frontier rejected the API key (401)", fix="Check FRONTIER_API_KEY"
             )
         if response.status_code == 429:
+            # Carry the body through. Providers put the wait in it — Gemini
+            # says "Please retry in 23.7s" — and a caller that backs off blind
+            # either waits far too long or retries into the same closed window.
+            # Discarding it cost one eval run ~15 minutes on a single call
+            # (30+60+120+240+480s) before giving up on a limit that clears in
+            # under a minute.
+            detail = response.text[:300].replace("\n", " ").strip()
             raise ProviderUnavailable(
-                "frontier rate-limited the request (429)", fix="Back off and retry"
+                f"frontier rate-limited the request (429): {detail}",
+                fix="Back off and retry",
             )
         if response.status_code >= 400:
             raise ProviderUnavailable(

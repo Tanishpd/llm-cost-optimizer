@@ -282,3 +282,16 @@ async def test_provider_parses_the_real_mock():
     assert completion.tokens_in > 0
     assert completion.tokens_out > 0
     assert completion.logprobs == []
+
+
+async def test_a_429_carries_the_providers_retry_hint(mock_client):
+    """The body is where providers say how long to wait — Gemini's 429 reads
+    "Please retry in 23.7s". Discarding it forced blind exponential backoff,
+    which cost one eval run ~15 minutes on a single call (30+60+120+240+480s)
+    waiting out a limit that clears in under a minute."""
+    provider = make_provider(lambda r: httpx.Response(
+        429, json={"error": {"message": "Quota exceeded. Please retry in 23.7s."}}))
+
+    with pytest.raises(ProviderUnavailable) as exc:
+        await provider.chat(model="m", messages=[{"role": "user", "content": "q"}])
+    assert "retry in 23.7s" in str(exc.value)
