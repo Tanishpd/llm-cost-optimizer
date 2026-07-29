@@ -466,3 +466,63 @@ async def test_a_successful_call_is_not_delayed():
     started = time.perf_counter()
     assert await with_retry(fine, what="probe", base_delay=10.0) == "ok"
     assert time.perf_counter() - started < 0.5
+
+
+def test_the_judge_token_budget_has_headroom_for_a_reasoning_model():
+    """A one-word verdict needs more than a one-word budget.
+
+    Reasoning models spend hidden thinking tokens against `max_tokens` and
+    those never appear in `completion_tokens`. At the old hardcoded 10,
+    gemini-3-flash-preview returned an empty string, every verdict parsed as
+    None, and the run would have produced zero labels after paying for 129
+    calls — with no error anywhere. Measured: 10 fails, 64 works.
+    """
+    from app.config import Settings
+
+    assert Settings(_env_file=None).eval_judge_max_tokens >= 64
+
+
+def test_an_unparseable_verdict_is_not_silently_dropped():
+    """`parse_judge` returning None must be *counted*, not ignored — that is
+    what made the failure invisible."""
+    from eval.grading import parse_judge
+
+    assert parse_judge("") is None
+    assert parse_judge("ACCEPTABLE") is not None
+
+
+async def test_the_retry_honours_the_providers_own_delay():
+    """Gemini's 429 body says "Please retry in 23.7s". Believing it beats
+    guessing — blind exponential backoff either waits far too long or retries
+    straight back into the same closed window."""
+    import time
+
+    from app.providers.base import ProviderUnavailable
+    from eval.run_eval import with_retry
+
+    attempts = {"n": 0}
+
+    async def limited():
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise ProviderUnavailable("429: Please retry in 0.05s. RESOURCE_EXHAUSTED")
+        return "ok"
+
+    started = time.perf_counter()
+    assert await with_retry(limited, what="probe", base_delay=60.0) == "ok"
+    # It waited the hinted 0.05s (+1s margin), not the 60s default.
+    assert time.perf_counter() - started < 5.0
+
+
+async def test_pacing_holds_a_minimum_gap():
+    """Staying under a rate limit is faster than retrying through one."""
+    import time
+
+    import eval.run_eval as re_mod
+
+    re_mod._last_call_at = 0.0
+    await re_mod.paced(0.0)          # disabled -> no delay
+    started = time.perf_counter()
+    await re_mod.paced(0.15)
+    await re_mod.paced(0.15)
+    assert time.perf_counter() - started >= 0.15

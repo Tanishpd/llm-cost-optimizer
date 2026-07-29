@@ -1016,6 +1016,9 @@ found nothing here, because no assertion existed to mutate.
 | `DEFAULT_DAILY_BUDGET_USD` | `0` | Cap for the implicit `default` and `anonymous` tenants. 0 = unlimited |
 | `SHADOW_SAMPLE_RATE` | `0.0` | Fraction of gate-accepted local answers re-run against the frontier to measure false-cheap. Off by default: it spends real money (D29) |
 | `SHADOW_DIVERGENCE_THRESHOLD` | `0.35` | Token overlap below which a shadow comparison counts as divergent |
+| `EVAL_JUDGE_MAX_TOKENS` | `64` | Eval only. A reasoning judge spends hidden thinking tokens against this; at 10 it returns nothing and every verdict parses as None |
+| `EVAL_REFERENCE_MAX_TOKENS` | `512` | Eval only. Separate from the local tiers' budget — a truncated reference makes the judge compare against a fragment |
+| `EVAL_MIN_CALL_INTERVAL_S` | `0.0` | Eval only. Pace under a rate limit rather than retry through it; Gemini's free tier is 20/min |
 | `CACHE_SCOPE` | `global` | `global` \| `tenant`. Global shares cached answers across tenants (the savings); tenant isolates them (D28) |
 | `MAX_DAILY_SPEND_USD` | `10.00` | **Armed by default.** The gateway's own daily ceiling across all tenants, bounding the cost of invariant 4. 0 disables |
 | `AUDIT_ENABLED` | `true` | Durable JSONL record of every routing decision, refusals included |

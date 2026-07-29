@@ -20,7 +20,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -29,6 +29,7 @@ import httpx
 import numpy as np
 
 from app.confidence import extract_metrics
+from app.config import get_settings
 from app.providers.base import ProviderError, ProviderTimeout, ProviderUnavailable
 from app.providers.frontier import FrontierProvider
 from app.providers.ollama import OllamaProvider
@@ -137,8 +138,13 @@ async def collect(
     frontier: FrontierProvider | None,
     judge: FrontierProvider | None,
     judge_model: str,
+    frontier_model: str,
+    judge_max_tokens: int = 64,
+    reference_max_tokens: int = 512,
+    call_interval: float = 0.0,
 ) -> dict[str, PromptResult]:
     cached = load_cached(tag)
+    unparseable: list[tuple[str, str, str]] = []
     results: dict[str, PromptResult] = dict(cached)
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=5.0)) as client:
@@ -164,7 +170,7 @@ async def collect(
                     result.label_source[tier] = "auto"
                     result.label_reason[tier] = g.reason
             elif use_real_frontier and frontier is not None and judge is not None:
-                frontier_model = os.getenv("FRONTIER_MODEL", "gpt-4o")
+                await paced(call_interval)
                 ref = await with_retry(
                     # Bound as defaults, not captured: the lambda is called
                     # immediately so late binding is harmless here, but a
@@ -173,12 +179,21 @@ async def collect(
                     lambda p=p, m=frontier_model: frontier.chat(
                         model=m,
                         messages=[{"role": "user", "content": p.prompt}],
-                        max_tokens=max_tokens,
+                        # Not `max_tokens`: that is the *local* tiers' budget.
+                        max_tokens=reference_max_tokens,
                     ),
                     what=f"{p.id} reference",
                 )
+                if ref.finish_reason == "length":
+                    # A truncated reference is worse than no reference: the
+                    # judge compares against a fragment and the label looks
+                    # real. Reasoning models eat this budget invisibly.
+                    print(f"      {p.id}: reference truncated at "
+                          f"{reference_max_tokens} tokens — raise "
+                          "EVAL_REFERENCE_MAX_TOKENS")
                 result.reference = ref.content
                 for tier, tr in result.tiers.items():
+                    await paced(call_interval)
                     verdict = await with_retry(
                         lambda tr=tr, p=p, ref=ref: judge.chat(
                             model=judge_model,
@@ -187,11 +202,25 @@ async def collect(
                                 {"role": "user",
                                  "content": judge_prompt(p.prompt, ref.content, tr.content)},
                             ],
-                            max_tokens=10,
+                            max_tokens=judge_max_tokens,
                         ),
                         what=f"{p.id} judge/{tier}",
                     )
                     g = parse_judge(verdict.content)
+                    if g is None:
+                        # A judge that returns nothing produces no labels, and
+                        # a calibration with no labels fails silently at the
+                        # very end after every call has been paid for. Count
+                        # them, and stop early rather than spend the rest.
+                        unparseable.append((p.id, tier, verdict.content[:40]))
+                        if len(unparseable) >= 5 and not any(r.labels for r in results.values()):
+                            raise RuntimeError(
+                                f"the judge returned {len(unparseable)} unparseable verdicts "
+                                f"and zero labels so far — e.g. {unparseable[:3]}. "
+                                "A reasoning model needs headroom: raise "
+                                "EVAL_JUDGE_MAX_TOKENS (currently "
+                                f"{judge_max_tokens}). Stopping before spending more."
+                            )
                     if g is not None:
                         result.labels[tier] = g.acceptable
                         result.label_source[tier] = "judge"
@@ -207,7 +236,26 @@ async def collect(
     return results
 
 
-async def with_retry(call, *, what: str, attempts: int = 6, base_delay: float = 4.0):
+_last_call_at = 0.0
+
+
+async def paced(interval_s: float) -> None:
+    """Hold a minimum gap between API calls.
+
+    Staying under a rate limit is faster than retrying through one: a 429 costs
+    the request *and* the wait, and the provider has to serve the rejection
+    either way.
+    """
+    global _last_call_at
+    if interval_s <= 0:
+        return
+    gap = interval_s - (time.monotonic() - _last_call_at)
+    if gap > 0:
+        await asyncio.sleep(gap)
+    _last_call_at = time.monotonic()
+
+
+async def with_retry(call, *, what: str, attempts: int = 6, base_delay: float = 30.0):
     """Retry a rate-limited or briefly-unavailable API call.
 
     Free tiers rate-limit, and until this existed a single 429 aborted the
@@ -229,7 +277,13 @@ async def with_retry(call, *, what: str, attempts: int = 6, base_delay: float = 
         except (ProviderUnavailable, ProviderTimeout) as exc:
             if attempt == attempts - 1:
                 raise
-            delay = base_delay * (2 ** attempt)
+            # Providers usually say how long to wait; Gemini puts it in the
+            # 429 body ("Please retry in 23.7s"). Believing them beats guessing
+            # — blind exponential backoff either waits far too long or retries
+            # into the same closed window.
+            hinted = re.search(r"retry in ([\d.]+)s", str(exc))
+            delay = (float(hinted.group(1)) + 1.0 if hinted
+                     else base_delay * (2 ** attempt))
             print(f"      {what}: {type(exc).__name__} — waiting {delay:.0f}s "
                   f"(attempt {attempt + 1}/{attempts})")
             await asyncio.sleep(delay)
@@ -261,12 +315,25 @@ async def main() -> int:
     parser.add_argument("--limit", type=int, default=0, help="only run the first N prompts")
     parser.add_argument("--max-tokens", type=int, default=120)
     parser.add_argument("--tag", default="", help="run cache name (default: auto or full)")
+    parser.add_argument("--only-judged", action="store_true",
+                        help="only the prompts that need the real API — the path "
+                             "--limit cannot reach, since the dataset starts with "
+                             "auto-gradable ones")
     args = parser.parse_args()
 
-    use_real = args.real_frontier or os.getenv("EVAL_USE_REAL_FRONTIER", "").lower() == "true"
+    # Settings, not os.getenv — it is the project convention (CLAUDE.md) and,
+    # more practically, it is what reads `.env`. Reading the environment
+    # directly meant a populated `.env` was silently ignored here while
+    # working everywhere else in the codebase, which is the worst kind of
+    # inconsistency: the file is right, the app is right, and only this script
+    # disagrees.
+    settings = get_settings()
+    use_real = args.real_frontier or settings.eval_use_real_frontier
     tag = args.tag or ("full" if use_real else "auto")
 
     prompts = DATASET if use_real else [p for p in DATASET if p.grade == "auto"]
+    if args.only_judged:
+        prompts = [p for p in prompts if p.grade != "auto"]
     if args.limit:
         prompts = prompts[: args.limit]
 
@@ -278,33 +345,48 @@ async def main() -> int:
     frontier = judge = None
     client = None
     if use_real:
-        key = os.getenv("FRONTIER_API_KEY", "")
-        judge_key = os.getenv("EVAL_JUDGE_API_KEY", "") or key
+        key = settings.frontier_api_key.get_secret_value()
+        judge_key = settings.eval_judge_api_key.get_secret_value() or key
         if not key or key == "mock-key":
             print("ERROR: --real-frontier needs FRONTIER_API_KEY set to a real key.")
             return 2
+
+        base = settings.frontier_base_url
+        judge_base = settings.eval_judge_base_url
+        # The single most likely misconfiguration, and it would otherwise
+        # produce 129 calls to a mock that returns canned text — a calibration
+        # fitted to nothing, with no sign anything was wrong.
+        if "localhost" in base or "127.0.0.1" in base:
+            print(f"ERROR: FRONTIER_BASE_URL is still the mock ({base}).")
+            print("       A real calibration needs a real provider. See the README.")
+            return 2
+
+        print(f"  frontier: {settings.frontier_model} at {base}")
+        print(f"  judge:    {settings.eval_judge_model} at {judge_base}")
+        if judge_base != base:
+            print("  note:     judge and frontier are different providers "
+                  "(deliberate — no model grades its own output, D11)")
+
         client = httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0))
-        frontier = FrontierProvider(
-            client, base_url=os.getenv("FRONTIER_BASE_URL", "https://api.openai.com/v1"),
-            api_key=key,
-        )
-        judge = FrontierProvider(
-            client, base_url=os.getenv("EVAL_JUDGE_BASE_URL", "https://api.anthropic.com/v1"),
-            api_key=judge_key,
-        )
+        frontier = FrontierProvider(client, base_url=base, api_key=key)
+        judge = FrontierProvider(client, base_url=judge_base, api_key=judge_key)
 
     try:
         started = time.perf_counter()
         results = await collect(
             prompts,
             tag=tag,
-            small_model=os.getenv("SMALL_MODEL", "qwen2.5:0.5b"),
-            large_model=os.getenv("LARGE_MODEL", "qwen2.5:3b"),
+            small_model=settings.small_model,
+            large_model=settings.large_model,
             max_tokens=args.max_tokens,
             use_real_frontier=use_real,
             frontier=frontier,
             judge=judge,
-            judge_model=os.getenv("EVAL_JUDGE_MODEL", "claude-sonnet-5"),
+            judge_model=settings.eval_judge_model,
+            frontier_model=settings.frontier_model,
+            judge_max_tokens=settings.eval_judge_max_tokens,
+            reference_max_tokens=settings.eval_reference_max_tokens,
+            call_interval=settings.eval_min_call_interval_s,
         )
     finally:
         if client is not None:
@@ -325,6 +407,21 @@ async def main() -> int:
               f"Brier={report.brier:.3f} vs base {report.brier_baseline:.3f}  [{mark}]")
         if not report.passed:
             print(f"           -> {report.verdict}")
+
+    # A partial run must not replace the artifact the gateway loads at startup.
+    #
+    # `--limit 3 --tag smoke` overwrote eval/calibrator.json with a 3-sample
+    # fit, and with CONFIDENCE_MODE=calibrated the gateway would have started
+    # serving on it — no error, no warning, just a confidence number derived
+    # from three prompts. A smoke test that silently repoints production is
+    # worse than no smoke test.
+    partial = bool(args.limit) or (args.tag and args.tag not in ("auto", "full"))
+    if partial:
+        print(f"\nNOT writing {CALIBRATOR_PATH.name}: this was a partial run "
+              f"({'--limit ' + str(args.limit) if args.limit else '--tag ' + args.tag}). "
+              "Re-run without --limit/--tag to publish a fit.")
+        print("run `python -m eval.report` for the cost-vs-quality frontier.\n")
+        return 0
 
     save(CALIBRATOR_PATH, calibrators, reports)
     shown = (CALIBRATOR_PATH.relative_to(Path.cwd())

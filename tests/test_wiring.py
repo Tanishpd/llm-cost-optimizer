@@ -151,6 +151,9 @@ INERT: dict[str, str] = {
     "eval_judge_base_url": "eval harness only",
     "eval_judge_model": "eval harness only",
     "eval_judge_api_key": "eval harness only",
+    "eval_judge_max_tokens": "eval harness only; covered in tests/test_eval.py",
+    "eval_reference_max_tokens": "eval harness only; covered in tests/test_eval.py",
+    "eval_min_call_interval_s": "eval harness only; covered in tests/test_eval.py",
     # Audit sizing: behaviour is covered in tests/test_audit.py against the
     # class directly, which is cheaper than driving it through a request.
     "audit_path": "covered in tests/test_audit.py",
