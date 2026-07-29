@@ -410,9 +410,24 @@ async def enforce_access(request: Request, call_next):
     principal = result.principal
     if principal == "anonymous":
         principal = f"ip:{request.client.host if request.client else 'unknown'}"
+    elif request.app.state.settings.rate_limit_scope == "tenant":
+        # One window for the whole account. Only for authenticated callers:
+        # every anonymous request resolves to the same `anonymous` tenant, so
+        # applying this there would collapse the entire internet into one
+        # bucket — worse than the per-IP window it replaced.
+        principal = f"tenant:{result.tenant}"
+
+    # A tenant may carry its own ceiling; 0 means inherit the global one.
+    #
+    # Looked up by tenant *name*, not by key: `AuthResult` deliberately does
+    # not carry the key, so that a credential never reaches request state and
+    # cannot be logged from it. `check()` already resolved the name for us.
+    tenant_limit = (
+        request.app.state.tenants.get(result.tenant).rate_limit_per_minute or None
+    )
 
     limiter: RedisRateLimiter = request.app.state.rate_limiter
-    allowed, remaining, retry_after = await limiter.check(principal)
+    allowed, remaining, retry_after = await limiter.check(principal, limit=tenant_limit)
     if not allowed:
         return JSONResponse(
             status_code=429,

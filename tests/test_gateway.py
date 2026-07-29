@@ -1396,3 +1396,119 @@ def test_tenant_scope_changes_the_digest():
     base = dict(prompt="q", model="m", temperature=0.0, top_p=1.0, max_tokens=10)
     assert (build_key(**base, scope="acme").digest
             != build_key(**base, scope="globex").digest)
+
+
+# --------------------------------------------------------------------------
+# M24: per-tenant rate limits
+#
+# Tenancy isolated spend and nothing else. A tenant with several keys got one
+# window *per key* and could consume a multiple of the limit, starving the
+# others — and per-tenant budgets did not close it, because a cache-served
+# request costs nothing and still consumes capacity.
+# --------------------------------------------------------------------------
+
+
+def _ask_as(client, key):
+    """`_ask` puts **extra into the JSON body, so it cannot carry credentials."""
+    return client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "What is the capital of France?"}]},
+        headers={"Authorization": f"Bearer {key}"},
+    )
+
+
+def _tenanted(client_factory, scope, tenants, keys, limit=2):
+    from app.budgets import TenantRegistry
+    from app.ratelimit import RedisRateLimiter
+    from app.security import RateLimiter
+
+    settings = Settings(_env_file=None, rate_limit_scope=scope)
+    c = client_factory(StubOllama(), settings=settings,
+                       auth=ApiKeyAuth(set(keys), tenant_for=lambda k: (
+                           TenantRegistry(tenants).resolve(k).name)),
+                       tenants=TenantRegistry(tenants))
+    c.app.state.rate_limiter = RedisRateLimiter(
+        None, limit=limit, window_s=60, fallback=RateLimiter(limit=limit, window_s=60))
+    return c
+
+
+def test_two_keys_of_one_tenant_share_a_window_under_tenant_scope(client_factory):
+    """The gap this closes: `key` scope gives a tenant one window per key, so
+    N keys buy N times the limit."""
+    from app.budgets import Tenant
+
+    tenants = [Tenant("acme", frozenset({"sk-a1", "sk-a2"}))]
+    c = _tenanted(client_factory, "tenant", tenants, {"sk-a1", "sk-a2"}, limit=2)
+
+    assert _ask_as(c, "sk-a1").status_code == 200
+    assert _ask_as(c, "sk-a2").status_code == 200
+    # Third request on the *other* key still hits the tenant's shared ceiling.
+    assert _ask_as(c, "sk-a1").status_code == 429
+
+
+def test_under_key_scope_the_same_two_keys_do_not_share(client_factory):
+    """The prior behaviour, kept as the default, and asserted so the change of
+    scope is visible rather than implied."""
+    from app.budgets import Tenant
+
+    tenants = [Tenant("acme", frozenset({"sk-a1", "sk-a2"}))]
+    c = _tenanted(client_factory, "key", tenants, {"sk-a1", "sk-a2"}, limit=2)
+
+    assert _ask_as(c, "sk-a1").status_code == 200
+    assert _ask_as(c, "sk-a1").status_code == 200
+    assert _ask_as(c, "sk-a1").status_code == 429, "that key is spent"
+    assert _ask_as(c, "sk-a2").status_code == 200, "but the other key has its own window"
+
+
+def test_a_multi_key_tenant_is_bounded_while_its_neighbour_is_not(client_factory):
+    """Both halves of the promise at once, and the first draft of this test had
+    only the second half — one key per tenant, which never shares a window
+    under *either* scope, so it passed with the feature disabled. Acme needs
+    more than one key for the bound to mean anything.
+    """
+    from app.budgets import Tenant
+
+    tenants = [Tenant("acme", frozenset({"sk-a1", "sk-a2"})),
+               Tenant("globex", frozenset({"sk-g"}))]
+    c = _tenanted(client_factory, "tenant", tenants, {"sk-a1", "sk-a2", "sk-g"}, limit=2)
+
+    # Bounded: acme's two keys draw on one window, so the second key does not
+    # buy a second allowance. Under `key` scope this third call would be a 200.
+    assert _ask_as(c, "sk-a1").status_code == 200
+    assert _ask_as(c, "sk-a2").status_code == 200
+    assert _ask_as(c, "sk-a1").status_code == 429
+
+    # Isolated: none of that touched globex.
+    assert _ask_as(c, "sk-g").status_code == 200
+    assert _ask_as(c, "sk-g").status_code == 200
+    assert _ask_as(c, "sk-g").status_code == 429, "and globex is bounded by the same rule"
+
+
+def test_a_tenants_own_limit_overrides_the_global_one(client_factory):
+    from app.budgets import Tenant
+
+    tenants = [Tenant("acme", frozenset({"sk-a"}), rate_limit_per_minute=1)]
+    c = _tenanted(client_factory, "tenant", tenants, {"sk-a"}, limit=50)
+
+    assert _ask_as(c, "sk-a").status_code == 200
+    assert _ask_as(c, "sk-a").status_code == 429, "acme's own 1/min bound, not the global 50"
+
+
+def test_anonymous_callers_stay_per_ip_under_tenant_scope(client_factory):
+    """Every unauthenticated request resolves to the same `anonymous` tenant.
+    Scoping those by tenant would put the whole internet in one bucket —
+    strictly worse than the per-IP window it replaced."""
+    from app.ratelimit import RedisRateLimiter
+    from app.security import RateLimiter
+
+    settings = Settings(_env_file=None, rate_limit_scope="tenant")
+    c = client_factory(StubOllama(), settings=settings)  # open gateway, no auth
+    c.app.state.rate_limiter = RedisRateLimiter(
+        None, limit=2, window_s=60, fallback=RateLimiter(limit=2, window_s=60))
+
+    assert _ask(c).status_code == 200
+    assert _ask(c).status_code == 200
+    assert _ask(c).status_code == 429
+    # The principal must be the IP, not `tenant:anonymous`.
+    assert any(p.startswith("ip:") for p in c.app.state.rate_limiter._fallback._hits)
+    assert not any(p.startswith("tenant:") for p in c.app.state.rate_limiter._fallback._hits)

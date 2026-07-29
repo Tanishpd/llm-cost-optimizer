@@ -75,6 +75,14 @@ class Tenant:
     name: str
     keys: frozenset[str] = field(default_factory=frozenset)
     daily_budget_usd: Decimal = Decimal("0")
+    # Requests per minute for this tenant. 0 = inherit RATE_LIMIT_PER_MINUTE.
+    #
+    # Separate from the budget because they bound different things: the budget
+    # caps what a tenant may *spend*, this caps what they may *consume*. A
+    # tenant whose traffic is served entirely from cache spends nothing and can
+    # still saturate the gateway, so a spend cap alone does not isolate
+    # tenants from each other.
+    rate_limit_per_minute: int = 0
 
     @property
     def unlimited(self) -> bool:

@@ -155,9 +155,25 @@ class Settings(BaseSettings):
     gateway_api_keys: str = ""
     require_auth: bool = False
     # Sliding window, per API key (per client IP when running open).
-    # 0 disables. In-process, so under multiple workers the effective limit
-    # multiplies by the worker count.
+    # 0 disables. Shared through Redis; falls back to per-process state if
+    # Redis is unreachable, where the effective limit multiplies by worker
+    # count — worse than shared, far better than none.
     rate_limit_per_minute: int = 60
+    # What one window belongs to.
+    #
+    #   key    — one window per API key (the default, and prior behaviour)
+    #   tenant — one window per account, shared by all of that tenant's keys
+    #
+    # `key` is not tenant isolation: a tenant with ten keys gets ten windows
+    # and can consume ten times the limit, starving everyone else. Per-tenant
+    # *budgets* do not close that, because they cap spend and a cache-served
+    # request spends nothing while still consuming capacity.
+    #
+    # Unauthenticated requests stay keyed by IP under either setting. Every
+    # anonymous caller resolves to the same `anonymous` tenant, so scoping them
+    # by tenant would put the entire internet in one bucket — strictly worse
+    # than the per-IP behaviour it replaced.
+    rate_limit_scope: Literal["key", "tenant"] = "key"
     # Request bounds. Each is a cost control and a stability control at once.
     max_prompt_chars: int = 32_000
     max_messages: int = 50
@@ -300,10 +316,20 @@ class Settings(BaseSettings):
                 ) from exc
             if budget < 0:
                 raise ValueError(f"TENANTS[{name!r}].daily_budget_usd is negative")
+            try:
+                rpm = int(spec.get("rate_limit_per_minute", 0) or 0)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"TENANTS[{name!r}].rate_limit_per_minute is not an integer: "
+                    f"{spec.get('rate_limit_per_minute')!r}"
+                ) from exc
+            if rpm < 0:
+                raise ValueError(f"TENANTS[{name!r}].rate_limit_per_minute is negative")
             out.append(Tenant(
                 name=name,
                 keys=frozenset(str(k).strip() for k in keys if str(k).strip()),
                 daily_budget_usd=budget,
+                rate_limit_per_minute=rpm,
             ))
         return out
 

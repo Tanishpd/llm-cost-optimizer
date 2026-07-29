@@ -101,8 +101,24 @@ once the tier does. Nothing to do but fix the tier.
 
 ### 429s, and the client says they are within their limit
 
-Rate limiting is **per principal** — per API key, or per client IP when the
-gateway runs open. Several clients behind one NAT share a bucket.
+Rate limiting is **per principal**, and what that means depends on
+`RATE_LIMIT_SCOPE`:
+
+| scope | one window per | 429 when |
+|---|---|---|
+| `key` (default) | API key | that key exceeds the limit |
+| `tenant` | account | the account's keys exceed it *between them* |
+
+So under `tenant` a client can be within its own limit and still be refused,
+because a sibling key on the same account spent the allowance. That is the
+setting working, not a bug — check whether the tenant has other active keys
+before digging further. Unauthenticated callers are keyed by client IP under
+both scopes, so several clients behind one NAT share a bucket either way.
+
+A tenant may also carry its own ceiling via
+`TENANTS[name].rate_limit_per_minute`, which overrides `RATE_LIMIT_PER_MINUTE`
+for that account. If one tenant is being refused far earlier than the global
+limit suggests, look there first.
 
 ```bash
 curl -s localhost:8000/healthz | jq '.config.rate_limit_distributed'

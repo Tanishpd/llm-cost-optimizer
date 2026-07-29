@@ -1024,7 +1024,7 @@ KB of paid API responses backing a documented result lived on one laptop with
 no way to recreate it that day. The docs said "never re-spend to recompute
 something already on disk"; that only holds if the disk is version-controlled.
 
-889 unit tests, 186 doc checks.
+902 unit tests, 186 doc checks.
 
 ---
 
@@ -1102,6 +1102,45 @@ holding a live API key that `git status` offered to stage.
 
 ---
 
+## M24 — tenancy that isolates more than spend (2026-07-29)
+
+M12 gave tenants named accounts and daily USD caps, and the docs called that
+multi-tenancy. It bounded what an account could **spend** and nothing about
+what it could **consume**: rate limiting stayed per API key, so a tenant with
+ten keys held ten windows and could take ten times the limit.
+
+The budget did not cover the gap, and could not — a request served from cache
+costs $0.00 and still occupies a slot. A tenant could saturate the gateway
+without registering a cent against their cap.
+
+`RATE_LIMIT_SCOPE=tenant` gives an account one window across all its keys, and
+`TENANTS[name].rate_limit_per_minute` sets a ceiling for that account alone.
+
+**The default stays `key`.** Changing what a rate-limit window *means* is not
+something an upgrade should do to a running deployment — the same reasoning
+that keeps per-tenant budgets off by default (D27).
+
+**Anonymous callers stay keyed by IP under both scopes.** Every unauthenticated
+request resolves to the same `anonymous` tenant, so scoping those by tenant
+would put the entire internet in one bucket — strictly worse than the per-IP
+window it replaced. That is a trap the feature had to route around rather than
+a detail.
+
+The limit travels per *call* rather than per limiter instance, so a tenant
+whose ceiling changes keeps its existing window instead of being handed a fresh
+empty bucket.
+
+**A test that passed with the feature switched off.** The first version of
+`test_one_tenant_cannot_starve_another` gave each tenant a single key — and
+two single-key tenants never share a window under *either* scope, so it proved
+nothing. Caught by disabling the feature and re-running, which is now how these
+get checked. Rewritten to give one tenant two keys, where the bound is the
+whole point.
+
+902 unit tests, 186 doc checks.
+
+---
+
 ## Configuration surface
 
 | Env var | Default | Purpose |
@@ -1139,8 +1178,9 @@ holding a live API key that `git status` offered to stage.
 | `SEMANTIC_THRESHOLD` | `0.95` | Cosine floor; conservative on purpose |
 | `SEMANTIC_MAX_CHARS` | `500` | Above this, skip semantic caching |
 | `STREAM_CHUNK_CHARS` | `24` | Characters per SSE content frame. Trades frame smoothness against ~200 bytes of envelope each; `0` sends one frame |
-| `TENANTS` | `{}` | JSON: `{"acme": {"keys": [...], "daily_budget_usd": "5.00"}}`. JSON rather than a delimited string because API keys may contain `:` or `=` |
+| `TENANTS` | `{}` | JSON: `{"acme": {"keys": [...], "daily_budget_usd": "5.00", "rate_limit_per_minute": 30}}`. JSON rather than a delimited string because API keys may contain `:` or `=`. `rate_limit_per_minute` of 0 inherits the global one |
 | `DEFAULT_DAILY_BUDGET_USD` | `0` | Cap for the implicit `default` and `anonymous` tenants. 0 = unlimited |
+| `RATE_LIMIT_SCOPE` | `key` | `key` = one window per API key (prior behaviour); `tenant` = one window per account. `key` is not isolation — N keys buy N times the limit. Anonymous callers stay per-IP under both |
 | `SHADOW_SAMPLE_RATE` | `0.0` | Fraction of gate-accepted local answers re-run against the frontier to measure false-cheap. Off by default: it spends real money (D29) |
 | `SHADOW_DIVERGENCE_THRESHOLD` | `0.35` | Token overlap below which a shadow comparison counts as divergent |
 | `EVAL_JUDGE_MAX_TOKENS` | `64` | Eval only. A reasoning judge spends hidden thinking tokens against this; at 10 it returns nothing and every verdict parses as None |
@@ -1318,7 +1358,7 @@ python3 scripts/demo.py
   Redis-backed sliding window shared across workers.
 - ~~**Multi-tenancy.**~~ **Done in M12** — named accounts with daily USD caps, per-tenant
   attribution in `/metrics`, and degradation to local tiers rather than refusal when a cap binds.
-  Still deferred within it: per-tenant *rate* limits and model allow-lists. Tenancy covers spend.
+  Per-tenant *rate* limits followed in M24 (`RATE_LIMIT_SCOPE`). Still deferred: model allow-lists.
 - ~~**Multi-worker uvicorn.**~~ **Done in M10** and verified with 4 real worker processes: the
   rate limiter moved to a Redis sorted set (it was the one genuinely broken piece — per-process
   windows meant a 60/min cap silently became 60N), and the semantic replica's version counter was
