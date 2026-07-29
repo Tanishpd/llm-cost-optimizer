@@ -5,7 +5,7 @@ the cheapest one that will actually do the job.
 
 > **Status: M0–M20 complete. The gateway runs, and it's hardened.**
 > All five tiers, both confidence gates, the eval harness and the dashboard are built and working —
-> **823 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
+> **827 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
 > rate
 > limiting, per-tenant budgets, a durable audit trail, circuit breakers, structured
 > logging and a container image are in. Run
@@ -287,7 +287,8 @@ FRONTIER_PRICE_OUT=10.00
 No code changes.
 
 **One step does cost money:** the eval harness (M6) calls a real API for reference answers and a
-judge model for quality scoring — roughly 3 calls per prompt across ~120 prompts. Compute the cost
+judge model for quality scoring. Of the 110 prompts, 67 are auto-gradable and cost nothing;
+only the 43 judged ones call out, at 3 calls each — **129 calls total**. Compute the cost
 from your actual rates before running; the price constants are placeholders. Every response is cached
 under `eval/runs/` so re-fitting calibrators never re-spends.
 
@@ -452,7 +453,7 @@ from exactly-summed integer token counters.
 ## How it's tested
 
 ```bash
-.venv/bin/python -m pytest -m "not integration"   # 823, hermetic — needs nothing running
+.venv/bin/python -m pytest -m "not integration"   # 827, hermetic — needs nothing running
 .venv/bin/ruff check app eval scripts mock_frontier tests
 .venv/bin/python scripts/check_docs.py            # 133 cross-document checks
 ```
@@ -463,10 +464,10 @@ suite had caught **one of fourteen**.
 
 | Layer | Catches | Blind to |
 |---|---|---|
-| **Unit** (823) | logic inside a module | whether modules are connected |
+| **Unit** (827) | logic inside a module | whether modules are connected |
 | **Wiring** | components not plugged in; settings wired to nothing | anything the real lifespan can't reach |
 | **Rendering** | dashboard JS that doesn't parse, run, or match the DOM | visual layout |
-| **Doc checks** (179) | docs contradicting the code | whether the code is right |
+| **Doc checks** (181) | docs contradicting the code | whether the code is right |
 | **Integration** (10) | real models, real Redis, the real OpenAI SDK | sustained load |
 | **Load** | cost identities under concurrency | correctness of one request |
 | **Soak** | memory/fd growth, latency drift over time | anything faster than a window |
@@ -578,6 +579,35 @@ an arena CPython never returns to the OS). The first is a failure; the second is
 working set is the larger number. And it says plainly what it cannot tell you: 30 minutes is not 30
 days.
 
+### Running the calibration
+
+The one step that spends money, and the reason the gateway still ships in `raw` mode.
+
+Any OpenAI-compatible provider works — the eval harness sends a plain
+`POST {base_url}/chat/completions` with a bearer token, so pointing it somewhere else is config only.
+Google's OpenAI-compatibility endpoint, for instance:
+
+```bash
+EVAL_USE_REAL_FRONTIER=true
+FRONTIER_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+FRONTIER_API_KEY=...
+FRONTIER_MODEL=gemini-2.0-flash
+EVAL_JUDGE_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+EVAL_JUDGE_API_KEY=...
+EVAL_JUDGE_MODEL=gemini-2.0-flash
+
+.venv/bin/python -m eval.run_eval --real-frontier
+```
+
+**129 calls**, sequential, with backoff on rate limits — a free tier finishes it, slowly. Every
+response is cached to `eval/runs/` after *each* prompt, so an interrupted run resumes rather than
+restarts.
+
+**One thing to be deliberate about.** Calibrating against a given provider fits the thresholds to
+*that* model's answers — the labels mean "as good as **this** model", not "good". If the frontier you
+calibrate against is not the one you serve with, the thresholds are measuring a proxy, and
+[D11](docs/DECISIONS.md) is already candid that judge-vs-human agreement is itself unverified here.
+
 ## Milestones
 
 Twenty-one milestones, each independently runnable. M0 came first deliberately: it resolves the one
@@ -609,7 +639,7 @@ assumption everything else rests on, before anything is built on top of it.
 
 ```
 $ .venv/bin/python -m pytest -q -m "not integration"
-823 passed, 10 deselected in 9.0s
+827 passed, 10 deselected in 9.5s
 
 $ .venv/bin/python scripts/preflight.py
   ✓ python 3.14.6   ✓ venv   ✓ disk 34.1 GB free   ! swap 87%
@@ -619,7 +649,7 @@ $ .venv/bin/python scripts/preflight.py
   ✓ redis reachable, no modules (brute-force cosine, as designed)
 
 $ .venv/bin/python scripts/check_docs.py
-  all 179 checks passed
+  all 181 checks passed
 ```
 
 The 10 integration tests need a live Ollama — one also needs the `openai` SDK, because a

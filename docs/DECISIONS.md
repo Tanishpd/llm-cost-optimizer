@@ -217,7 +217,8 @@ calibrators never re-spends.
 
 **The judge is a separate provider from the reference** (`EVAL_JUDGE_BASE_URL` / `EVAL_JUDGE_MODEL` /
 `EVAL_JUDGE_API_KEY`, distinct from `FRONTIER_*`), so no model grades its own output. Volume is 1
-reference completion + 1 judge call per local tier = 3 calls per prompt, ~360 across the set. Compute
+reference completion + 1 judge call per local tier = 3 calls per judged prompt. Only 43 of the
+110 are judged — the rest are auto-gradable and free — so **129 calls across the set**. Compute
 the cost from your configured rates before running — the price constants are placeholders, not quotes.
 
 **Rejected.** Hand-labeling (slow, and calibration is only as good as the labels). Using the 3B to
