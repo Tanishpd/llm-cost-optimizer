@@ -207,6 +207,28 @@ def render(
                   labels={"tenant": name},
                   help="0 when a cap exists but cannot be applied — i.e. spend is uncapped.")
 
+    shadow = metrics.get("shadow") or {}
+    if shadow.get("completed") is not None:
+        r.add("shadow_sampled_total", shadow.get("sampled", 0), type="counter",
+              help="Requests selected for a shadow comparison.")
+        r.add("shadow_completed_total", shadow.get("completed", 0), type="counter",
+              help="Shadow comparisons that produced a similarity score.")
+        r.add("shadow_divergent_total", shadow.get("divergent", 0), type="counter",
+              help="Comparisons where the gate's answer did not resemble the frontier's. "
+                   "The false-cheap signal.")
+        r.add("shadow_failed_total", shadow.get("failed", 0), type="counter",
+              help="Shadow calls that errored. Costs a measurement, never a request.")
+        r.add("shadow_skipped_budget_total", shadow.get("skipped_budget", 0), type="counter",
+              help="Comparisons skipped because a budget or the ceiling was exhausted.")
+        r.add("shadow_cost_usd_total", shadow.get("cost_usd", 0.0), type="counter",
+              help="Money spent on measurement rather than on answers.")
+        r.add("shadow_mean_similarity", shadow.get("mean_similarity", 0.0),
+              help="Mean token overlap with the frontier. A tripwire, not a quality "
+                   "score — watch the trend, not the value.")
+        r.add("shadow_divergence_ratio", shadow.get("divergence_rate", 0.0),
+              help="Divergent over completed. Rising means the gate is accepting "
+                   "answers it should escalate.")
+
     if health:
         r.add("up", 1 if health.get("status") != "unhealthy" else 0,
               help="1 unless no model tier is reachable at all.")

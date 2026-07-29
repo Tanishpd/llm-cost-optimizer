@@ -3,9 +3,9 @@
 An API gateway that sits in front of several models of escalating cost and decides — per request —
 the cheapest one that will actually do the job.
 
-> **Status: M0–M17 complete. The gateway runs, and it's hardened.**
+> **Status: M0–M18 complete. The gateway runs, and it's hardened.**
 > All five tiers, both confidence gates, the eval harness and the dashboard are built and working —
-> **765 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
+> **794 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
 > rate
 > limiting, per-tenant budgets, a durable audit trail, circuit breakers, structured
 > logging and a container image are in. Run
@@ -452,7 +452,7 @@ from exactly-summed integer token counters.
 ## How it's tested
 
 ```bash
-.venv/bin/python -m pytest -m "not integration"   # 765, hermetic — needs nothing running
+.venv/bin/python -m pytest -m "not integration"   # 794, hermetic — needs nothing running
 .venv/bin/ruff check app eval scripts mock_frontier tests
 .venv/bin/python scripts/check_docs.py            # 133 cross-document checks
 ```
@@ -463,10 +463,10 @@ suite had caught **one of fourteen**.
 
 | Layer | Catches | Blind to |
 |---|---|---|
-| **Unit** (765) | logic inside a module | whether modules are connected |
+| **Unit** (794) | logic inside a module | whether modules are connected |
 | **Wiring** | components not plugged in; settings wired to nothing | anything the real lifespan can't reach |
 | **Rendering** | dashboard JS that doesn't parse, run, or match the DOM | visual layout |
-| **Doc checks** (165) | docs contradicting the code | whether the code is right |
+| **Doc checks** (169) | docs contradicting the code | whether the code is right |
 | **Integration** (10) | real models, real Redis, the real OpenAI SDK | sustained load |
 | **Load** | cost identities under concurrency | correctness of one request |
 | **Soak** | memory/fd growth, latency drift over time | anything faster than a window |
@@ -487,6 +487,34 @@ becoming flaky later.
 testing — nothing currently grades whether an assertion would fail if the code
 were wrong. Concurrency is tested in a few places, but M10's multi-worker
 verification was done by hand and isn't in CI.
+
+### Measuring the claim, continuously
+
+The gate's premise — *logprobs tell you when the cheap answer is good enough* — was validated **once**,
+offline, on 67 prompts, and one of the two gates failed. Nothing since would notice it drifting.
+
+```bash
+SHADOW_SAMPLE_RATE=0.01
+```
+
+That re-runs 1% of gate-**accepted** local answers against the frontier, out of band, and records how
+much the two agree. The caller never waits for it and never sees it; the result lands in `/metrics`
+and the audit trail as a false-cheap rate that updates continuously.
+
+**Off by default, because it spends real money** — a shadow call is a real frontier call for an answer
+nobody reads. That is the honest cost, and it is the mirror of `MAX_DAILY_SPEND_USD`: one must be
+switched on deliberately, the other switched off deliberately. Shadow spend is billed to the tenant,
+counts against the ceiling, and is skipped when either is exhausted.
+
+Three things stated rather than glossed:
+
+- **It cannot break what it measures.** It runs after the response; a failing frontier costs a
+  measurement, never a request. There is a test for exactly that.
+- **It measures false-cheap only** — answers served locally that should have escalated. It says
+  nothing about unnecessary escalations, which cost money rather than quality.
+- **It needs a real frontier.** The mock's content is canned, so every comparison diverges and the
+  rate reads 100%. Startup warns loudly if you point it at the mock — verified, because that
+  misconfiguration looks exactly like a catastrophic gate ([D29](docs/DECISIONS.md)).
 
 ### Metrics for a scraper
 
@@ -531,7 +559,7 @@ days.
 
 ## Milestones
 
-Eighteen milestones, each independently runnable. M0 came first deliberately: it resolves the one
+Nineteen milestones, each independently runnable. M0 came first deliberately: it resolves the one
 assumption everything else rests on, before anything is built on top of it.
 
 | | Milestone | State |
@@ -554,10 +582,11 @@ assumption everything else rests on, before anything is built on top of it.
 | **M15** | Prometheus metrics, soak testing | **done** |
 | **M16** | Release engineering, supply chain, runbook | **done** |
 | **M17** | Security hardening | **done** — found a cross-tenant leak |
+| **M18** | Shadow sampling | **done** — the claim, measured continuously |
 
 ```
 $ .venv/bin/python -m pytest -q -m "not integration"
-765 passed, 10 deselected in 5.7s
+794 passed, 10 deselected in 6.1s
 
 $ .venv/bin/python scripts/preflight.py
   ✓ python 3.14.6   ✓ venv   ✓ disk 34.1 GB free   ! swap 87%
@@ -567,7 +596,7 @@ $ .venv/bin/python scripts/preflight.py
   ✓ redis reachable, no modules (brute-force cosine, as designed)
 
 $ .venv/bin/python scripts/check_docs.py
-  all 165 checks passed
+  all 169 checks passed
 ```
 
 The 10 integration tests need a live Ollama — one also needs the `openai` SDK, because a

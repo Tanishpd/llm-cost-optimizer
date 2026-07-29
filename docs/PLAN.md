@@ -806,6 +806,57 @@ handle on every cached answer, every budget counter and every rate-limit window
 
 765 unit tests, 165 doc checks.
 
+### M18 — Shadow sampling ✅ DONE (2026-07-29)
+
+The last production item, and the one that changes what this project *is*.
+
+Every claim about the confidence gate rested on M6: one offline run, 67
+auto-gradable prompts, and gate `large` failing its validation. Nothing since
+would have noticed the thresholds drifting — a prompt distribution shifts, a
+model gets updated, and the gate degrades silently while the answers keep
+coming and nothing looks broken. That is exactly the failure this design exists
+to make visible, and it was the one thing the design could not see.
+
+`SHADOW_SAMPLE_RATE` re-runs a fraction of gate-**accepted** local answers
+against the frontier, out of band, and records the agreement. The caller never
+waits and never sees it; the result lands in `/metrics`, Prometheus and the
+audit trail as a continuously updated false-cheap rate.
+
+Verified live at rate 1.0 against the mock:
+
+    3 requests: 2 served by local_small (sampled), 1 by frontier (correctly not)
+    sampled 2, completed 2, failed 0, cost $0.00177
+
+**And that run produced a trap worth closing.** It reported
+`divergence_rate: 1.0` at `mean_similarity: 0.03` — which is a fact about the
+*mock*, whose content is canned (D9), not about the gate. Someone enabling
+shadow mode against the mock would conclude their gate was catastrophically
+broken. Startup now warns loudly when shadow sampling is on and the frontier
+looks like the mock; verified by starting one and reading the log.
+
+Three properties are asserted rather than assumed, because each would turn the
+instrument into a liability:
+
+- **It cannot break what it measures.** A failing frontier costs a measurement,
+  never a request.
+- **It cannot outspend what it measures.** Shadow calls are billed to the
+  tenant, count against the ceiling, and are skipped when either is exhausted.
+- **It samples the right thing.** Cache hits were checked when produced and a
+  frontier answer *is* the reference; shadowing either pays to compare
+  something with itself.
+
+Sampling is deterministic in the trace id so an anomaly is reproducible — and
+hashed rather than `int(trace_id, 16) % N`, because the first version sampled
+2000/2000 at rate 0.5 on sequential ids. The modulo of a raw id is uniform only
+if the ids are.
+
+Similarity is Jaccard over word sets, deliberately not a judge model: a judge
+would double the cost and put a second model's opinion inside a number meant to
+be a tripwire. **The absolute value is not a quality score** and the docs say so
+in three places.
+
+794 unit tests, 169 doc checks.
+
 ---
 
 ## Configuration surface
@@ -847,6 +898,8 @@ handle on every cached answer, every budget counter and every rate-limit window
 | `STREAM_CHUNK_CHARS` | `24` | Characters per SSE content frame. Trades frame smoothness against ~200 bytes of envelope each; `0` sends one frame |
 | `TENANTS` | `{}` | JSON: `{"acme": {"keys": [...], "daily_budget_usd": "5.00"}}`. JSON rather than a delimited string because API keys may contain `:` or `=` |
 | `DEFAULT_DAILY_BUDGET_USD` | `0` | Cap for the implicit `default` and `anonymous` tenants. 0 = unlimited |
+| `SHADOW_SAMPLE_RATE` | `0.0` | Fraction of gate-accepted local answers re-run against the frontier to measure false-cheap. Off by default: it spends real money (D29) |
+| `SHADOW_DIVERGENCE_THRESHOLD` | `0.35` | Token overlap below which a shadow comparison counts as divergent |
 | `CACHE_SCOPE` | `global` | `global` \| `tenant`. Global shares cached answers across tenants (the savings); tenant isolates them (D28) |
 | `MAX_DAILY_SPEND_USD` | `10.00` | **Armed by default.** The gateway's own daily ceiling across all tenants, bounding the cost of invariant 4. 0 disables |
 | `AUDIT_ENABLED` | `true` | Durable JSONL record of every routing decision, refusals included |

@@ -41,6 +41,7 @@ from app.providers.base import ProviderUnavailable
 from app.ratelimit import RedisRateLimiter
 from app.resilience import BreakerRegistry, RetryPolicy
 from app.security import ApiKeyAuth, RequestLimits
+from app.shadow import ShadowSampler
 from app.telemetry import Telemetry
 from tests.test_gateway import StubFrontier, StubOllama
 
@@ -323,6 +324,8 @@ def budget_client():
         # Disabled: the request path must be exercised without any test
         # writing files. tests/test_audit.py covers the enabled path.
         c.app.state.audit = AuditLog("unused", enabled=False)
+        # Off by default, as shipped. tests/test_shadow.py covers it on.
+        c.app.state.shadow = ShadowSampler(rate=0.0)
         c.app.state.calibrators = {}
         return c
     return _make

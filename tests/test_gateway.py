@@ -21,6 +21,7 @@ from app.providers.base import Completion, ProviderTimeout, ProviderUnavailable
 from app.ratelimit import RedisRateLimiter
 from app.resilience import BreakerRegistry, RetryPolicy
 from app.security import ApiKeyAuth, RateLimiter, RequestLimits
+from app.shadow import ShadowSampler
 from app.telemetry import Telemetry
 
 REAL_LOGPROBS = [
@@ -138,6 +139,8 @@ def client_factory():
         # Disabled: the request path must be exercised without any test
         # writing files. tests/test_audit.py covers the enabled path.
         c.app.state.audit = AuditLog("unused", enabled=False)
+        # Off by default, as shipped. tests/test_shadow.py covers it on.
+        c.app.state.shadow = ShadowSampler(rate=0.0)
         # Empty by default: the shipped mode is `raw`, which ignores these.
         c.app.state.calibrators = calibrators if calibrators is not None else {}
         # No tenants and no default cap: budgets are opt-in, so the

@@ -29,6 +29,7 @@ from app.ratelimit import RedisRateLimiter
 from app.resilience import BreakerRegistry, RetryPolicy
 from app.schemas import ChatCompletionResponse, HlrMetadata
 from app.security import ApiKeyAuth, RequestLimits
+from app.shadow import ShadowSampler
 from app.streaming import DONE, split_content, sse_stream
 from app.telemetry import Telemetry
 from tests.test_gateway import StubFrontier, StubOllama
@@ -185,6 +186,8 @@ def stream_client():
         # Disabled: the request path must be exercised without any test
         # writing files. tests/test_audit.py covers the enabled path.
         c.app.state.audit = AuditLog("unused", enabled=False)
+        # Off by default, as shipped. tests/test_shadow.py covers it on.
+        c.app.state.shadow = ShadowSampler(rate=0.0)
         c.app.state.calibrators = {}
         # No tenants and no default cap: budgets are opt-in, so the
         # shipped default must be what most tests exercise.
