@@ -169,7 +169,10 @@ def stream_client():
     def _make(stub, *, frontier=None, cache=None, settings=None,
               tenants=None, budget_redis=None):
         c = TestClient(app)
-        c.app.state.settings = settings or Settings(_env_file=None)
+        # `raw` explicitly — this factory bypasses the lifespan, so it also
+        # bypasses the guard that refuses `calibrated` with no calibrator
+        # loaded. Same reasoning as tests/test_gateway.py's factory.
+        c.app.state.settings = settings or Settings(_env_file=None, confidence_mode="raw")
         c.app.state.ollama = stub
         c.app.state.http = None
         c.app.state.redis = None

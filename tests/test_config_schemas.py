@@ -28,10 +28,25 @@ def test_defaults_match_the_documented_config_table():
     assert s.small_model == "qwen2.5:0.5b"
     assert s.large_model == "qwen2.5:3b"
     assert s.embed_model == "nomic-embed-text"
-    assert s.confidence_mode == "raw"
+    assert s.confidence_mode == "calibrated"
     assert (s.threshold_small, s.threshold_large) == (0.55, 0.62)
     assert (s.target_small, s.target_large) == (0.92, 0.85)
     assert s.semantic_threshold == 0.95
+
+
+def test_the_shipped_default_matches_the_committed_calibrator():
+    """`calibrated` is only a safe default because `eval/calibrator.json` is
+    committed *and* was fitted on the models this file also defaults to. Change
+    either without the other and every fresh clone refuses to start."""
+    import json
+    from pathlib import Path
+
+    s = Settings(_env_file=None)
+    prov = json.loads(
+        (Path(__file__).resolve().parent.parent / s.calibrator_path).read_text()
+    ).get("provenance") or {}
+    assert prov.get("small_model") == s.small_model
+    assert prov.get("large_model") == s.large_model
 
 
 def test_threshold_for_respects_confidence_mode():

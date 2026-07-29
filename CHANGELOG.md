@@ -18,6 +18,50 @@ than a mistake. `0.2.0` has notes below but was never tagged.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-07-29
+
+The version that acts on what 0.3.0 measured, and closes the half of tenancy
+that was never built.
+
+### Changed
+
+- **`CONFIDENCE_MODE` now defaults to `calibrated`.** 0.3.0 measured that both
+  gates pass and left the default at `raw` for portability. What changed the
+  calculus is the provenance guard: a model mismatch is a startup refusal
+  naming both model sets, not a silent wrong number. A default that fails
+  loudly on the configuration it cannot serve beats one that quietly
+  under-uses a measured result. `0.85` now means what it says out of the box.
+
+  **This is a behaviour change.** The default only works because
+  `eval/calibrator.json` is committed and was fitted on `qwen2.5:0.5b` /
+  `qwen2.5:3b`, which `config.py` also defaults to. Running other models means
+  `CONFIDENCE_MODE=raw` or refitting — otherwise the gateway refuses to start.
+  A test now asserts the committed calibrator's provenance matches the default
+  models, so changing one without the other fails locally.
+
+### Added
+
+- **Per-tenant rate limits.** `RATE_LIMIT_SCOPE=tenant` gives an account one
+  window across all its keys; `TENANTS[name].rate_limit_per_minute` sets a
+  ceiling for that account alone. Tenancy previously bounded what an account
+  could *spend* and nothing about what it could *consume* — a tenant with ten
+  keys held ten windows, and budgets could not close that because a
+  cache-served request costs $0.00 and still occupies a slot.
+
+  The default stays `key`, the prior behaviour. Anonymous callers stay keyed by
+  IP under both scopes: every unauthenticated request resolves to the same
+  `anonymous` tenant, so scoping them by tenant would put the whole internet in
+  one bucket.
+
+### Fixed
+
+- **Test factories inherited the new default and went green by coincidence.**
+  They bypass the lifespan, so they bypass the guard that refuses `calibrated`
+  with no calibrator loaded — `confidence.py` falls back to raw `geo_mean`
+  while `threshold_for` returns the calibrated `0.92`. All ~900 tests still
+  passed, because the stub's logprobs score `0.9725` and clear both `0.55` and
+  `0.92`. The factories now pin `confidence_mode="raw"` explicitly.
+
 ## [0.3.0] — 2026-07-29
 
 The version where the central claim stopped being a hypothesis. 0.2.0 could be

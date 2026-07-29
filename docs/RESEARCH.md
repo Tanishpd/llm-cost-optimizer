@@ -614,11 +614,12 @@ still returns a number in [0, 1] that looks exactly like a probability.
 the gateway **refuses to start** in `calibrated` mode when they disagree with
 what it is configured to run.
 
-**The shipped default stays `raw`** — not because 0.85 is unearned, but
-because these weights are specific to `qwen2.5:0.5b` / `qwen2.5:3b` on this
-dataset. A default that hard-fails on any model change serves nobody; `raw`
-works everywhere and `CONFIDENCE_MODE=calibrated` is one line for a deployment
-running the models this was fitted on.
+**`calibrated` became the shipped default in 0.4.0.** It stayed `raw` at first
+on portability grounds — these weights describe `qwen2.5:0.5b` / `qwen2.5:3b`
+on this dataset and nothing else. What changed the calculus is the provenance
+guard: a model mismatch is now a startup refusal naming both model sets, not a
+silent wrong number. A default that fails loudly on the configuration it
+cannot serve is safer than one that quietly under-uses a measured result.
 
 ## 4. Redis: no vector index today, but an upgrade path exists
 

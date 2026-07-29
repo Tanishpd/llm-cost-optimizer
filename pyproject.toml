@@ -2,7 +2,7 @@
 name = "llm-cost-optimizer"
 # Single source of truth is app/__init__.py::__version__; check_docs.py
 # asserts these agree.
-version = "0.3.0"
+version = "0.4.0"
 description = "API gateway that routes each prompt to the cheapest model tier that can answer it"
 requires-python = ">=3.12"
 
