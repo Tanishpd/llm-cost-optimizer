@@ -304,7 +304,7 @@ actually found, and noticing that the unit suite caught one of fourteen.
 
 | Layer | Command | Catches | Blind to |
 |---|---|---|---|
-| **Unit** (906, hermetic) | `pytest -m "not integration"` | Logic inside a module | Whether modules are connected |
+| **Unit** (913, hermetic) | `pytest -m "not integration"` | Logic inside a module | Whether modules are connected |
 | **Wiring** | `tests/test_wiring.py` | Components not plugged in; settings wired to nothing | Anything the real lifespan cannot reach |
 | **Rendering** | `tests/test_dashboard.py` | JS that does not parse, run, or match the DOM | Visual layout — a bar can be the wrong width and still render |
 | **Doc consistency** (208) | `scripts/check_docs.py` | Docs contradicting the code | Whether the code is right |

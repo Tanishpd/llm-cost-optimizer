@@ -5,7 +5,7 @@ the cheapest one that will actually do the job.
 
 > **Status: M0–M25 complete. The gateway runs, and it's hardened.**
 > All five tiers, both confidence gates, the eval harness and the dashboard are built and working —
-> **906 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
+> **913 unit tests** (hermetic, no network) plus 10 integration tests against live models. Auth,
 > rate
 > limiting, per-tenant budgets and rate limits, a durable audit trail, circuit breakers, structured
 > logging and a container image are in. Run
@@ -240,7 +240,7 @@ Contributing? [CONTRIBUTING.md](CONTRIBUTING.md) has the loop these three
 commands belong to, and what CI will check that they do not.
 
 ```bash
-.venv/bin/python -m pytest -m "not integration"   # 906, hermetic — needs nothing running
+.venv/bin/python -m pytest -m "not integration"   # 913, hermetic — needs nothing running
 .venv/bin/ruff check app eval scripts mock_frontier tests
 .venv/bin/python scripts/check_docs.py            # 208 cross-document checks
 ```
@@ -251,7 +251,7 @@ suite had caught **one of fourteen**.
 
 | Layer | Catches | Blind to |
 |---|---|---|
-| **Unit** (906) | logic inside a module | whether modules are connected |
+| **Unit** (913) | logic inside a module | whether modules are connected |
 | **Wiring** | components not plugged in; settings wired to nothing | anything the real lifespan can't reach |
 | **Rendering** | dashboard JS that doesn't parse, run, or match the DOM | visual layout |
 | **Doc checks** (208) | docs contradicting the code | whether the code is right |

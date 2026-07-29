@@ -207,6 +207,7 @@ INERT: dict[str, str] = {
     "stream_chunk_chars": "covered in tests/test_streaming.py",
     "default_max_tokens": "covered below — found dead by this very test",
     "default_temperature": "covered below — found dead by this very test",
+    "eval_max_spend_usd": "eval harness only; covered in tests/test_eval.py",
     "rate_limit_scope": "covered in tests/test_gateway.py (M24, both scopes asserted)",
 }
 
