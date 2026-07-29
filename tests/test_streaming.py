@@ -346,10 +346,24 @@ def test_the_real_openai_sdk_can_stream_from_the_gateway():
     exactly how this test first "failed".
     """
     import os
+    import urllib.error
+    import urllib.request
 
     openai = pytest.importorskip("openai")
 
     base = os.getenv("GATEWAY_URL", "http://localhost:8000").rstrip("/")
+    # Skip rather than fail when nothing is listening.
+    #
+    # A missing precondition is not a broken contract, and the two must not
+    # look alike: without this the run ends in `openai.APIConnectionError`
+    # wrapped in two layers of httpx traceback, which reads exactly like the
+    # SDK rejecting our SSE framing — the one thing this test exists to catch.
+    # `pytest -m integration` with no gateway up now says so in one line.
+    try:
+        urllib.request.urlopen(f"{base}/livez", timeout=2).read()
+    except (urllib.error.URLError, OSError) as exc:
+        pytest.skip(f"no gateway at {base} ({exc}). Start one: "
+                    f"uvicorn app.main:app --port 8000")
     client = openai.OpenAI(base_url=f"{base}/v1", api_key="unused")
     stream = client.chat.completions.create(
         model="gateway",
