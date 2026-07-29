@@ -7,6 +7,12 @@ updates:
     directory: "/"
     schedule: {interval: weekly}
     open-pull-requests-limit: 5
+    ignore:
+      # Owned by `pydantic`, which pins it exactly. Bumping it on its own
+      # produces a set pip cannot resolve — Dependabot proposed exactly that
+      # (pydantic-core 2.47.0 against pydantic 2.13.4) and every CI job failed.
+      # It moves when pydantic moves.
+      - dependency-name: pydantic-core
     groups:
       # One PR for the routine churn, so a genuine major bump is not buried
       # under six patch updates.
