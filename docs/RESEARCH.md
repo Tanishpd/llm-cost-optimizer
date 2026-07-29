@@ -282,6 +282,13 @@ whom?"* (ground truth: c. 1259 BC, Ramesses II of Egypt and Ḫattušili III of 
 | `qwen2.5:0.5b` | **0.5535** | **accept** (0.55) | *"signed in 1956 … between Egypt and Israel … ended the Six-Day War ongoing since 1967"* |
 | `qwen2.5:3b` | 0.5600 | escalate (0.62) | *"not an actual treaty … a historical legend associated with the Bronze Age"* |
 
+**Re-verified 2026-07-29**, same prompt, same models, `max_tokens=120`. The 0.5B
+reproduces **exactly**: `geo_mean` 0.5535, still accepted at 0.55, same
+fabricated answer word for word. The 3B now scores **0.6080** rather than
+0.5600 — same verdict (escalate) and the same hedged answer, so the finding is
+unaffected, but the figure moved and the original conditions could not be
+reconstructed precisely enough to say why. The row above is left as recorded.
+
 The 0.5B's answer is wrong in every particular and internally contradictory — a 1956 treaty ending a
 war that began in 1967 — and the gate **accepted it**, by 0.0035. That is a **demonstrated
 false-cheap** at the shipped default: a confidently wrong answer served instantly, for free, with no

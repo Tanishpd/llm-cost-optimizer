@@ -273,6 +273,41 @@ def check_request_defaults_match_config() -> None:
                   str(value) in row.group(0))
 
 
+def check_results_match_the_fitted_calibrator() -> None:
+    """RESULTS.md showcases numbers that live in eval/calibrator.json.
+
+    A showcase document that drifts from its artifact is worse than none: it
+    reads as evidence while being a memory of evidence. Refitting on new data
+    changes the JSON and leaves the prose behind, and nothing else would
+    notice — the prose is not executed by anything.
+
+    So the headline figures are checked against the file the gateway actually
+    loads. If they disagree, one of them is stale and this says which.
+
+    It is a substring test, and the limit is worth naming: a figure quoted in
+    two places with only one updated still passes, because the other still
+    matches. What it does catch is the case that actually happens — a refit
+    moves every number and the write-up keeps the old ones.
+    """
+    results = ROOT / "docs/RESULTS.md"
+    calibrator = ROOT / "eval/calibrator.json"
+    if not results.exists() or not calibrator.exists():
+        return
+
+    import json
+
+    text = results.read_text()
+    data = json.loads(calibrator.read_text())
+    for gate, report in (data.get("validation") or {}).items():
+        for label, value in (("ECE", report["ece"]), ("Brier", report["brier"]),
+                             ("base-rate Brier", report["brier_baseline"])):
+            check(f"RESULTS.md quotes gate {gate}'s {label} ({value:.3f})",
+                  f"{value:.3f}" in text,
+                  "refit without updating the write-up?")
+        check(f"RESULTS.md quotes gate {gate}'s n ({report['n']})",
+              str(report["n"]) in text)
+
+
 def check_readme_agrees_with_itself_on_counts() -> None:
     """The README states the test and doc-check totals in several places.
 
@@ -508,6 +543,7 @@ def main() -> int:
     check_promised_files_exist()
     check_dashboard_is_self_contained()
     check_eval_cost_matches_the_dataset()
+    check_results_match_the_fitted_calibrator()
     check_readme_agrees_with_itself_on_counts()
     check_milestone_counts_are_history_not_status()
     check_version_is_single_sourced()

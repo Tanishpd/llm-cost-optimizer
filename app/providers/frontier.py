@@ -72,6 +72,20 @@ class FrontierProvider:
         # the default judge model.
         if reasoning_effort:
             payload["reasoning_effort"] = reasoning_effort
+        # An empty key is a configuration error, and it must not be reported
+        # as an unreachable upstream. `Authorization: Bearer ` is an illegal
+        # header, so httpx raises before any connection is attempted — which
+        # lands in the `RequestError` branch below and advises starting a mock
+        # that is very often already running. Diagnosed the slow way once:
+        # `curl` to the same URL returned 401, so the mock looked like it was
+        # rejecting the key, when in fact the gateway had never sent a request.
+        if not self._api_key.strip():
+            raise ProviderUnavailable(
+                f"frontier has no API key configured ({self._base_url})",
+                fix="Set FRONTIER_API_KEY. The bundled mock accepts `mock-key`, "
+                    "which is what .env.example ships.",
+            )
+
         started = time.perf_counter()
         try:
             response = await self._client.post(
