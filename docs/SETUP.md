@@ -13,9 +13,21 @@ This machine has **8 GB of RAM**, which is a more interesting constraint than it
   estimated ~4.8 GB resident and would thrash. `mistral:7b` from the original spec is out for this
   reason. The practical ceiling is 3B–4B — which is why the design spends its RAM on a *two-model
   cascade* rather than one bigger model: two gates let the gateway decide how much compute a prompt
-  deserves, not just "local or not". The 0.5B earns its place: at the shipped threshold gate 1
-  escalates only 15% of the eval set, so the cheapest tier serves most traffic. D1's reversal
-  condition was gate 1 accepting <10% — it accepts 85% ([D1](DECISIONS.md)).
+  deserves, not just "local or not". The 0.5B earns its place, though by less than an earlier version
+  of this file claimed — measured on the 110-prompt eval set:
+
+  | mode | gate 1 accepts | escalates |
+  |---|---|---|
+  | `raw` (0.55 on `geo_mean`) | 67% | 33% |
+  | `calibrated` (0.92, the shipped default) | **31%** | 69% |
+
+  So the cheapest tier serves about a third of this set under the shipped default, not "most of it".
+  D1's reversal condition — gate 1 accepting under 10% — is still comfortably clear, so the two-model
+  cascade stands ([D1](DECISIONS.md)). The old "accepts 85%" was true of the 67 auto-gradable prompts
+  in `raw` mode and became wrong twice over: the set grew to include `reasoning` and `code`, and the
+  default became `calibrated`, which demands 0.92 rather than 0.55. Both figures above are an upper
+  bound on acceptance — the gate's hard vetoes (hedging, suspiciously short answers, missing
+  logprobs) can only push more traffic upward.
 - **No PyTorch, no `transformers`, no `sentence-transformers`.** Ollama already serves embeddings
   over HTTP; a second inference runtime would compete for the same scarce memory. The Python side is
   numpy-only at runtime.
