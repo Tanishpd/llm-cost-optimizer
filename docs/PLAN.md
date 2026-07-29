@@ -743,6 +743,69 @@ deleting an entry and watching it fail.
 
 751 unit tests, 161 doc checks.
 
+### M17 — Security hardening ✅ DONE (2026-07-29)
+
+Item 6. Started by looking for real problems rather than adding headers and
+calling it done, which turned up one worth the whole milestone.
+
+**A cross-tenant prompt leak, reproduced.** The caches are global — no tenant in
+the key, and the semantic index searched by vector across everyone. That
+sharing is deliberate and is where the savings come from. What was not
+deliberate: a semantic hit's `reason` string echoed up to 60 characters of the
+*matched* prompt, which may have been written by a different tenant.
+
+Two tenants configured, acme asked "how much is the quarterly retention bonus
+we pay", globex asked a near-identical question:
+
+    globex tier   : cache_semantic
+    globex reason : semantic cache hit at cosine 1.0000 (threshold 0.95);
+                    matched 'how much is the quarterly retention bonus we pay'
+
+acme's exact wording, in globex's response and in globex's logs.
+
+**Honest severity.** The guards bound how different the two prompts can be —
+equal number sets, equal capitalized entities, matching negation, cosine ≥ 0.95
+— so a cross-tenant hit means near-identical questions. The first attempt at
+this reproduction *failed* for exactly that reason ("Jane Doe" vs "Jane" is an
+entity mismatch). Narrow, and not nothing.
+
+Fixed two ways. Under `CACHE_SCOPE=global` the matched text is withheld and the
+reason says so. Under `CACHE_SCOPE=tenant` both caches are isolated and the text
+is shown, because a hit can only be your own (D28).
+
+**Scoping the exact key was not sufficient**, and the tests caught that: the
+semantic index is searched by *vector*, so a scoped key isolated the stored
+answer while the search still matched another tenant's entry. Both needed
+changing. Fixing one and believing it fixed both is the obvious mistake here,
+so there is a test per cache.
+
+Old entries stay usable: an empty scope hashes to exactly the digests produced
+before the setting existed.
+
+**The audit trail was world-readable.** 0644 files in a 0755 directory —
+on a shared host, every local account could read who asked for what and what it
+cost. Now 0700/0600, created with `os.open(..., 0o600)` rather than chmod'd
+afterwards so there is no window where the file is readable, and the mode
+survives rotation.
+
+**Browser-side headers**, because the gateway serves HTML from the same origin
+as an API that spends money: `X-Content-Type-Options`, `X-Frame-Options: DENY`,
+`Referrer-Policy: no-referrer`, and `Cache-Control: no-store` on `/v1/*` so
+prompts do not sit in an intermediary cache.
+
+Two deliberate omissions, both tested so they stay deliberate. **No HSTS** —
+this process should not terminate TLS, and asserting HSTS from a plaintext
+origin either does nothing or is stripped by the proxy that should own it.
+**No CORS middleware** — with none configured a browser blocks cross-origin
+reads by default, so the only thing a CORS policy could do here is make it less
+safe.
+
+**A remote unauthenticated Redis now warns at startup.** It is a read/write
+handle on every cached answer, every budget counter and every rate-limit window
+— including the ability to zero a counter and uncap spend.
+
+765 unit tests, 165 doc checks.
+
 ---
 
 ## Configuration surface
@@ -784,6 +847,7 @@ deleting an entry and watching it fail.
 | `STREAM_CHUNK_CHARS` | `24` | Characters per SSE content frame. Trades frame smoothness against ~200 bytes of envelope each; `0` sends one frame |
 | `TENANTS` | `{}` | JSON: `{"acme": {"keys": [...], "daily_budget_usd": "5.00"}}`. JSON rather than a delimited string because API keys may contain `:` or `=` |
 | `DEFAULT_DAILY_BUDGET_USD` | `0` | Cap for the implicit `default` and `anonymous` tenants. 0 = unlimited |
+| `CACHE_SCOPE` | `global` | `global` \| `tenant`. Global shares cached answers across tenants (the savings); tenant isolates them (D28) |
 | `MAX_DAILY_SPEND_USD` | `10.00` | **Armed by default.** The gateway's own daily ceiling across all tenants, bounding the cost of invariant 4. 0 disables |
 | `AUDIT_ENABLED` | `true` | Durable JSONL record of every routing decision, refusals included |
 | `AUDIT_PATH` | `audit` | Directory. One file per worker PID — a line can exceed `PIPE_BUF`, above which concurrent `O_APPEND` is not atomic |

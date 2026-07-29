@@ -134,6 +134,33 @@ Everything is unreachable. The only genuine outage this system has.
 ollama ps && redis-cli ping && curl -s $FRONTIER_BASE_URL/models
 ```
 
+### `REDIS IS REMOTE AND UNAUTHENTICATED` at startup
+
+**Meaning.** `REDIS_URL` points somewhere other than loopback and carries no
+password. Anyone who can reach that port has a read/write handle on every
+cached answer, every budget counter and every rate-limit window — including the
+ability to zero a counter and uncap your spend.
+
+```bash
+REDIS_URL=redis://:<password>@host:6379/0   # password
+REDIS_URL=rediss://host:6379/0              # TLS
+```
+
+Both are restarts. Loopback and the compose service name are exempt from the
+warning, because neither is reachable from outside the host.
+
+### TLS
+
+**This process should not terminate TLS.** Put it behind a proxy that does, and
+let the proxy own `Strict-Transport-Security` — the gateway deliberately does
+not set it, because asserting HSTS from a plaintext origin either does nothing
+or is stripped, and either way it misleads a reader into thinking transport
+security is handled somewhere.
+
+The gateway sets `X-Content-Type-Options`, `X-Frame-Options` and
+`Referrer-Policy` itself, and `Cache-Control: no-store` on `/v1/*` so prompts
+do not sit in an intermediary cache.
+
 ### Answers are wrong, but nothing is unhealthy
 
 The most likely cause is the semantic cache serving a near-miss. A wrong cache
@@ -210,3 +237,5 @@ the GitHub release from the matching `CHANGELOG.md` section.
 | `tier_attempted` > `requests_by_tier` | Escalation. A request that walked three tiers was attempted by three and served by one |
 | Confidence ~0.5–0.75 on correct answers | Expected for `geo_mean` on a small model. It measures fluency, not correctness ([RESEARCH.md §3.1](RESEARCH.md)) |
 | `x_hlr.confidence_mode: "raw"` | The shipped default. Gate `large` failed calibration; 0.85 has not been earned |
+| A tenant getting another's cached answer | `CACHE_SCOPE=global`, the default — that sharing *is* the saving. Set `CACHE_SCOPE=tenant` if isolation matters more (D28) |
+| `text withheld: CACHE_SCOPE=global` in a reason | Working as designed: the match may be another tenant's prompt, so its text is not echoed |

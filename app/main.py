@@ -21,6 +21,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, Request, Response
@@ -154,6 +155,18 @@ async def lifespan(app: FastAPI):
         max_output_tokens=settings.max_output_tokens,
         max_body_bytes=settings.max_body_bytes,
     )
+
+    # A remote Redis with no password is a full read/write handle on every
+    # cached answer, every budget counter and every rate-limit window — held by
+    # anyone who can reach the port. Loopback is fine; anything else is not.
+    parsed = urlparse(settings.redis_url)
+    if parsed.hostname not in (None, "localhost", "127.0.0.1", "::1", "redis") \
+            and not (parsed.password or parsed.scheme == "rediss"):
+        logger.warning(
+            "REDIS IS REMOTE AND UNAUTHENTICATED (%s). Anyone who can reach it can read "
+            "cached answers and reset budget counters. Use redis://:<password>@host or "
+            "rediss:// for TLS.", parsed.hostname,
+        )
 
     if app.state.auth.misconfigured:
         # Refuse to start rather than serve open traffic while claiming to be
@@ -371,6 +384,35 @@ async def enforce_access(request: Request, call_next):
 
 
 @app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Headers that cost nothing and close real browser-side attacks.
+
+    The gateway serves HTML (`/dashboard`) from the same origin as an API that
+    spends money, which is the combination these exist for.
+
+    HSTS is **not** set here. This process should not be terminating TLS — put
+    it behind a proxy that does — and asserting HSTS from a plaintext origin
+    either does nothing or, worse, is set by a proxy that then strips it. The
+    proxy owns that header; see docs/RUNBOOK.md.
+
+    No CORS middleware, deliberately: with none configured a browser blocks
+    cross-origin reads by default, which is the correct posture for an API
+    holding a spend budget. Adding a permissive policy would be the only way to
+    make this *less* safe, so there is no knob for it.
+    """
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    # The dashboard is meant to be viewed directly, never embedded — framing it
+    # is only useful for clickjacking a button on someone else's behalf.
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    # Prompts can be sensitive; keep them out of intermediary caches.
+    if request.url.path.startswith("/v1/"):
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
+
+
+@app.middleware("http")
 async def add_trace_id(request: Request, call_next):
     """Every request gets a trace id, propagated into telemetry and returned as
     a header so a caller can correlate without parsing the body."""
@@ -503,6 +545,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
         top_p=body.top_p,
         max_tokens=body.max_tokens,
         system_prompt=body.system_prompt,
+        scope=tenant_name if settings.cache_scope == "tenant" else "",
     )
     if not body.bypass_cache:
         cache_started = time.perf_counter()
@@ -564,6 +607,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
                         prompt=body.user_prompt,
                         key=key,
                         is_multi_turn=body.is_multi_turn,
+                        scope=tenant_name if settings.cache_scope == "tenant" else "",
                     )
                     latency["cache_semantic"] = round(
                         (time.perf_counter() - sem_started) * 1000, 1
@@ -591,7 +635,8 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
                                 reason=(
                                     f"semantic cache hit at cosine {outcome.similarity:.4f} "
                                     f"(threshold {settings.semantic_threshold}); matched "
-                                    f"{outcome.prompt[:60]!r}, originally from {stored.tier}"
+                                    f"{_matched_prompt(settings, outcome.prompt)}, "
+                                    f"originally from {stored.tier}"
                                 ),
                                 trace_id=trace_id,
                                 started=started,
@@ -805,6 +850,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> Any
                 key=key,
                 is_multi_turn=body.is_multi_turn,
                 ttl=_exact_cache(request).ttl_for(tier),
+                scope=tenant_name if settings.cache_scope == "tenant" else "",
             )
 
     # Every gate evaluated on the way, with its full metric vector — this is
@@ -929,6 +975,23 @@ def _apply_sampling_defaults(body: ChatCompletionRequest, settings: Settings) ->
         body.temperature = settings.default_temperature
     if "max_tokens" not in body.model_fields_set:
         body.max_tokens = settings.default_max_tokens
+
+
+def _matched_prompt(settings: Settings, prompt: str) -> str:
+    """How to describe the prompt a semantic hit matched.
+
+    Under `CACHE_SCOPE=global` the entry may have been written by a *different
+    tenant*, and echoing it puts their wording in this caller's response — and
+    in this caller's logs. The guards mean the two prompts are necessarily
+    close, so the exposure is narrow, but "narrow" is not a reason to hand one
+    tenant another's text.
+
+    Under `CACHE_SCOPE=tenant` a hit can only be your own earlier request, so
+    the text is shown: it is the most useful thing in the string.
+    """
+    if settings.cache_scope == "tenant":
+        return repr(prompt[:60])
+    return "an earlier equivalent question (text withheld: CACHE_SCOPE=global)"
 
 
 def budget_reason(reason: str, verdict) -> str:
@@ -1248,6 +1311,8 @@ async def route_only(body: ChatCompletionRequest, request: Request) -> RouteDeci
             top_p=body.top_p,
             max_tokens=body.max_tokens,
             system_prompt=body.system_prompt,
+            scope=(getattr(request.state, "tenant", "anonymous")
+                   if settings.cache_scope == "tenant" else ""),
         )
         preview.exact_checked = True
         preview.exact_hit = await _exact_cache(request).get(key) is not None

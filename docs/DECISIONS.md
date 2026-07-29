@@ -568,3 +568,44 @@ monthly budget just as fast, and then you are unprotected for four weeks).
 
 **Revisit if.** The escalation-rate breaker gets built — then this becomes the backstop rather than
 the primary control, and its default could reasonably rise.
+
+## D28 — Caches are shared across tenants by default, and say so
+
+**Decision.** `CACHE_SCOPE=global` (default) puts every tenant in one cache. `CACHE_SCOPE=tenant`
+makes the tenant part of the exact-cache key *and* filters the semantic index, so a hit can only ever
+be that tenant's own earlier request.
+
+**Why global is the default.** It is where the savings come from. The second tenant to ask a common
+question pays nothing, and for public-knowledge traffic — which is most of what a gateway like this
+sees — that is the entire point. Defaulting to isolation would quietly discard the cross-tenant hit
+rate, which is the largest single saving the cache produces.
+
+**What global costs, stated plainly.** A semantic hit can match an entry written by a *different*
+tenant. The guards bound how different the two prompts can be — cosine ≥ `SEMANTIC_THRESHOLD`, equal
+number sets, equal capitalized-entity sets, matching negation — so a cross-tenant hit means the two
+questions were near-identical. It is a narrow exposure and it is not nothing.
+
+**The reason string was the leak, and it was reproduced.** With two tenants configured, acme asked
+*"how much is the quarterly retention bonus we pay"* and globex asked a near-identical question;
+globex's `x_hlr.reason` came back carrying acme's exact wording, and so did globex's logs. Under
+`global` the matched text is now withheld and the reason says it was withheld; under `tenant` it is
+shown, because a hit can only be your own.
+
+**Scoping the exact key is not sufficient on its own.** The semantic index is searched by vector
+similarity, not by key — a scoped key isolates the stored answer while the *search* still matches
+another tenant's entry. Both had to change. A test asserts the exact cache and the semantic tier are
+each isolated, because fixing one and believing it fixed both is the obvious mistake here.
+
+**Old entries stay usable.** `scope` is the empty string under `global`, and an empty scope hashes to
+exactly the digests this project produced before the setting existed — so turning isolation on and
+off again does not orphan a populated cache.
+
+**Rejected.** Tenant isolation by default (silently discards the main saving). Removing the matched
+prompt from the reason entirely (it is the most useful thing in that string when the match is your
+own). Hashing the matched prompt (a hash tells a reader nothing and still confirms *which* prompt to
+anyone who can guess it).
+
+**Revisit if.** Prompts routinely carry tenant-proprietary context. `SEMANTIC_MAX_CHARS=500` already
+excludes long RAG-style prompts from semantic caching, and differing system prompts already produce
+different exact keys — but if that changes, `tenant` becomes the right default and this entry should
+be reversed rather than argued with.

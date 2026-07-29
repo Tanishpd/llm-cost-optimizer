@@ -288,3 +288,65 @@ def test_the_loop_does_not_short_circuit_on_a_match():
         if isinstance(node, ast.For):
             has_break = any(isinstance(n, ast.Break) for n in ast.walk(node))
             assert not has_break, "the key-comparison loop breaks on first match"
+
+
+# --------------------------------------------------------------------------
+# browser-side hardening
+#
+# The gateway serves HTML (/dashboard) from the same origin as an API that
+# spends money. These headers cost nothing and close the attacks that
+# combination invites.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def hardened(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.config import get_settings
+    from app.main import app
+
+    monkeypatch.setenv("WARM_MODELS_ON_STARTUP", "false")
+    monkeypatch.setenv("AUDIT_ENABLED", "false")
+    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:1/0")
+    get_settings.cache_clear()
+    with TestClient(app) as c:
+        yield c
+    get_settings.cache_clear()
+
+
+def test_security_headers_are_present(hardened):
+    r = hardened.get("/healthz")
+    assert r.headers["X-Content-Type-Options"] == "nosniff"
+    assert r.headers["X-Frame-Options"] == "DENY"
+    assert r.headers["Referrer-Policy"] == "no-referrer"
+
+
+def test_the_dashboard_cannot_be_framed(hardened):
+    """Framing it is only useful for clickjacking a control on someone's
+    behalf — it is meant to be viewed directly."""
+    assert hardened.get("/dashboard").headers["X-Frame-Options"] == "DENY"
+
+
+def test_completions_are_not_cacheable_by_intermediaries(hardened):
+    """Prompts can be sensitive; a proxy holding them is a copy nobody
+    accounted for."""
+    r = hardened.post("/v1/chat/completions",
+                      json={"messages": [{"role": "user", "content": "q"}], "stream": False})
+    assert r.headers.get("Cache-Control") == "no-store"
+
+
+def test_no_cors_policy_is_configured():
+    """Deliberate. With none configured a browser blocks cross-origin reads by
+    default, which is the right posture for an API holding a spend budget —
+    adding a permissive policy is the only way to make this less safe."""
+    from app.main import app
+    assert not any("CORS" in type(m.cls).__name__ or "CORS" in str(m.cls)
+                   for m in app.user_middleware)
+
+
+def test_hsts_is_not_asserted_from_a_plaintext_origin(hardened):
+    """The TLS-terminating proxy owns that header. Setting it here either does
+    nothing or is stripped, and either way it misleads a reader into thinking
+    transport security is handled."""
+    assert "Strict-Transport-Security" not in hardened.get("/healthz").headers
