@@ -6,6 +6,16 @@ versioning is [semver](https://semver.org/).
 `app/__init__.py::__version__` is the single source of the version number, and
 the release workflow refuses to build a tag that disagrees with it.
 
+**Tags before `v0.1.0` are development milestones, not releases.** `v0.1-m0`
+through `v0.8-m7`, and `v1.0`/`v1.1`/`v2.0`, mark the end of a build milestone —
+`v2.0` is M10, not a major version. They predate the release workflow and would
+fail its `tag == __version__` check today, which is the clearest statement that
+they are not releases. Read them as bookmarks in the history.
+
+Release tags are semver and match `__version__` exactly. That numbering restarts
+below the milestone tags, so `v0.3.0` sorting under `v2.0` is expected rather
+than a mistake. `0.2.0` has notes below but was never tagged.
+
 ## [Unreleased]
 
 ## [0.3.0] — 2026-07-29

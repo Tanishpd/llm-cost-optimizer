@@ -1024,7 +1024,7 @@ KB of paid API responses backing a documented result lived on one laptop with
 no way to recreate it that day. The docs said "never re-spend to recompute
 something already on disk"; that only holds if the disk is version-controlled.
 
-889 unit tests, 185 doc checks.
+889 unit tests, 186 doc checks.
 
 ---
 
