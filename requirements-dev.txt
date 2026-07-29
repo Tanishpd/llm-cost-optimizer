@@ -1,5 +1,5 @@
 -r requirements.txt
-pytest>=8.3
+pytest>=9.1.1
 pytest-asyncio>=0.24
 # Only for tests/test_streaming.py::test_the_real_openai_sdk_can_stream_from_the
 # _gateway, which is integration-marked and deselected in CI. The gateway
