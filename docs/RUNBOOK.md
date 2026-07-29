@@ -226,13 +226,49 @@ Releases publish a digest-addressed image. **Pin the digest, not the tag** —
 docker run ghcr.io/<owner>/llm-cost-optimizer@sha256:<digest>
 ```
 
-`<owner>` is **lowercase**, whatever case the GitHub account uses. OCI requires
-it, and buildx rejects the tag outright — `repository name must be lowercase` —
-rather than normalizing. The release workflow lowercases
-`${GITHUB_REPOSITORY,,}` for exactly this reason; it built the image and failed
-at the push on v0.3.0, the first tag cut since that workflow was written.
-
 The digest for each release is in that release's build summary.
+
+`<owner>` is **lowercase**, whatever case the GitHub account uses. OCI requires
+it and buildx rejects the tag outright — `repository name must be lowercase` —
+rather than normalizing, so the release workflow lowercases
+`$GITHUB_REPOSITORY` through `tr` before tagging. That is not hypothetical: the
+image built and then failed at the push on v0.3.0, the first tag cut after the
+workflow was written.
+
+**The published image may not be pullable by you.** A GitHub Packages container
+inherits the visibility it had when first published and does **not** follow the
+repository afterwards, so a package created while the repo was private stays
+private even once the repo is public — anonymous pulls get `403`. Check before
+relying on this path in an incident:
+
+```bash
+tok=$(curl -s "https://ghcr.io/token?scope=repository:<owner>/llm-cost-optimizer:pull&service=ghcr.io" \
+      | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $tok" \
+  https://ghcr.io/v2/<owner>/llm-cost-optimizer/manifests/<tag>
+```
+
+`200` means anyone can pull it; `403` means only accounts with repository access
+can. To change it: **package settings → Danger Zone → Change visibility**. There
+is no API for this and no way to do it from a workflow — it is a deliberate
+manual step, so it will not happen by itself.
+
+**Rolling back without the registry.** The Dockerfile is in the repo and every
+release is a tag, so a rollback never depends on the registry being reachable or
+readable:
+
+```bash
+git checkout v0.3.0 && docker build -t hlr:v0.3.0 . && docker run hlr:v0.3.0
+```
+
+Slower than pulling a prebuilt image, and it rebuilds rather than reusing the
+exact artifact that was tested — but it works when the registry does not, which
+is the point of writing it down here rather than discovering it mid-incident.
+
+That path is exercised continuously: CI's `docker` job runs `docker build .` on
+every PR, boots the image with **no Redis and no Ollama**, and requires
+`/livez` to come up anyway. So the fallback is known to work, unlike the pull,
+which nothing tests because CI never pushes or pulls an image.
 
 **What a rollback does not undo.** Redis holds cached answers keyed partly by
 `KEY_SCHEMA_VERSION`; if a release changed it, the old build will simply miss
