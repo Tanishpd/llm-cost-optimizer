@@ -134,9 +134,19 @@ class RateLimiter:
     def enabled(self) -> bool:
         return self._limit > 0
 
-    def check(self, principal: str, *, now: float | None = None) -> tuple[bool, int, float]:
-        """(allowed, remaining, retry_after_seconds)."""
-        if not self.enabled:
+    def check(
+        self, principal: str, *, now: float | None = None, limit: int | None = None
+    ) -> tuple[bool, int, float]:
+        """(allowed, remaining, retry_after_seconds).
+
+        `limit` overrides the configured one for this call, so a tenant can
+        carry its own ceiling without needing a limiter instance each. Passing
+        it per call rather than per instance keeps the window shared: a tenant
+        whose limit is edited at runtime keeps its existing history instead of
+        starting from an empty bucket.
+        """
+        effective = self._limit if limit is None else limit
+        if effective <= 0:
             return True, -1, 0.0
         now = time.monotonic() if now is None else now
         window = self._hits[principal]
@@ -144,12 +154,12 @@ class RateLimiter:
         while window and window[0] <= cutoff:
             window.popleft()
 
-        if len(window) >= self._limit:
+        if len(window) >= effective:
             retry_after = max(0.0, window[0] + self._window - now)
             return False, 0, round(retry_after, 1)
 
         window.append(now)
-        return True, self._limit - len(window), 0.0
+        return True, effective - len(window), 0.0
 
     def reset(self) -> None:
         self._hits.clear()

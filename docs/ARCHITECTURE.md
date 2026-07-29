@@ -304,7 +304,7 @@ actually found, and noticing that the unit suite caught one of fourteen.
 
 | Layer | Command | Catches | Blind to |
 |---|---|---|---|
-| **Unit** (889, hermetic) | `pytest -m "not integration"` | Logic inside a module | Whether modules are connected |
+| **Unit** (902, hermetic) | `pytest -m "not integration"` | Logic inside a module | Whether modules are connected |
 | **Wiring** | `tests/test_wiring.py` | Components not plugged in; settings wired to nothing | Anything the real lifespan cannot reach |
 | **Rendering** | `tests/test_dashboard.py` | JS that does not parse, run, or match the DOM | Visual layout — a bar can be the wrong width and still render |
 | **Doc consistency** (186) | `scripts/check_docs.py` | Docs contradicting the code | Whether the code is right |
@@ -369,10 +369,14 @@ Each is a place the design expects to change, with the interface already drawn:
   than a pause ([D8](DECISIONS.md)).
 - **Worker count is capped by RAM, not by design.** Each worker holds its own numpy replica and
   HTTP pool; on 8 GB, 2–4 is the practical ceiling.
-- **No per-tenant rate limits or model allow-lists.** Tenancy exists and covers *spend* — named
-  accounts, daily caps, per-tenant attribution ([D22](DECISIONS.md)) — but rate limiting is still per
-  *key*, and every tenant may reach every tier. Adding either means extending `Tenant`, which the
-  config shape (JSON) already accommodates.
+- **No model allow-lists.** Every tenant may reach every tier. Adding one means extending `Tenant`,
+  which the config shape (JSON) already accommodates — the same route `rate_limit_per_minute` took.
+- **Rate limiting is per key by default, and that is not tenant isolation.** `RATE_LIMIT_SCOPE=tenant`
+  gives an account one window across all its keys; the default `key` gives it one *per* key, so N
+  keys buy N times the limit. Per-tenant budgets do not close that gap, because they cap spend and a
+  cache-served request spends nothing while still consuming capacity. Anonymous callers stay keyed by
+  IP under both scopes — every one of them resolves to the same `anonymous` tenant, so scoping them
+  by tenant would put the whole internet in one bucket.
 - **The audit trail is local, not shipped.** JSONL on disk, rotated, one file per worker
   ([D26](DECISIONS.md)). Durable across restarts, which the capped telemetry stream never was — but
   it does not survive the host, and there is no cross-worker query. Both are shipper problems, and

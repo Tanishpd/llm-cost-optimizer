@@ -322,7 +322,7 @@ which is worse than shared but far better than none.
 
 **M0–M23 complete (2026-07-29).** The gateway runs and is hardened: all five tiers, both gates, eval
 harness, dashboard, auth, shared rate limiting, circuit breakers, structured logging, container
-image, streaming, per-tenant budgets, a durable audit trail. **889 unit + 10 integration
+image, streaming, per-tenant budgets, a durable audit trail. **902 unit + 10 integration
 tests** at 96% coverage, 186 doc-consistency checks. `python3 scripts/demo.py`
 walks every tier.
 
@@ -346,9 +346,17 @@ Measured, and now recorded in RESEARCH.md §3.1–3.2:
 **One thing is queued:** a real-frontier calibration run, deferred by choice — it needs an API key
 and a few dollars, and M6's negative result stands until it happens.
 
-Still deliberately not built: per-tenant *rate* limits and model allow-lists (tenancy covers spend
-only), and shipping the audit trail off-host (it is durable and local; JSONL is already the format a
-shipper wants).
+**Per-tenant rate limits landed in M24.** `RATE_LIMIT_SCOPE=tenant` gives an account one window
+across all its keys; `TENANTS[name].rate_limit_per_minute` overrides the global ceiling for that
+account. The default stays `key` — the prior behaviour — because changing what a window means is not
+something an upgrade should do to a running deployment. Note `key` scope is *not* isolation: N keys
+buy N times the limit, and per-tenant budgets do not close that, since a cache-served request spends
+nothing and still consumes capacity.
+
+Still deliberately not built: model allow-lists (every tenant may reach every tier), and shipping the
+audit trail off-host — that one is not a code gap at all. `AuditLog` already writes rotated per-PID
+JSONL, which is exactly what Vector or Fluent Bit want pointed at them; it is host config, not a
+missing feature.
 
 Before changing anything, run `.venv/bin/python scripts/check_docs.py` — it enforces the
 cross-document invariants below, and it has caught drift four times.

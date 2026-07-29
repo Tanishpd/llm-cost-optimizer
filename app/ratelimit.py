@@ -98,11 +98,20 @@ class RedisRateLimiter:
         """True when the shared Redis window is actually in use."""
         return self._redis is not None and not self._degraded
 
-    async def check(self, principal: str) -> tuple[bool, int, float]:
-        if not self.enabled:
+    async def check(
+        self, principal: str, *, limit: int | None = None
+    ) -> tuple[bool, int, float]:
+        """`limit` overrides the configured ceiling for this call.
+
+        That is how a per-tenant limit reaches the shared window without one
+        limiter instance per tenant — the Lua script already takes the limit as
+        an argument, so the window itself is untouched by the override.
+        """
+        effective = self._limit if limit is None else limit
+        if effective <= 0:
             return True, -1, 0.0
         if self._redis is None:
-            return self._fallback.check(principal)
+            return self._fallback.check(principal, limit=effective)
 
         if self._script is None:
             self._script = self._redis.register_script(_SLIDING_WINDOW_LUA)
@@ -110,7 +119,7 @@ class RedisRateLimiter:
         try:
             allowed, remaining, retry_ms = await self._script(
                 keys=[f"{KEY_PREFIX}{principal}"],
-                args=[time.time(), self._window, self._limit, uuid.uuid4().hex],
+                args=[time.time(), self._window, effective, uuid.uuid4().hex],
             )
             if self._degraded:
                 logger.info("rate limiter back on shared Redis state")
@@ -124,7 +133,7 @@ class RedisRateLimiter:
                     exc,
                 )
                 self._degraded = True
-            return self._fallback.check(principal)
+            return self._fallback.check(principal, limit=effective)
 
     async def reset(self, principal: str | None = None) -> None:
         """Clear one principal's window, or the fallback's. Test convenience."""

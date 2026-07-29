@@ -690,3 +690,85 @@ def test_the_overshoot_bound_is_computed_at_a_scale_that_separates_it():
     """
     micro = max_overshoot_micro(1_000_000, Decimal("10.00"))
     assert micro == usd_to_micro(Decimal("10.00")), "per-million pricing is off"
+
+
+# --------------------------------------------------------------------------
+# per-tenant rate limits
+#
+# Tenancy claimed to isolate tenants while isolating only spend. A tenant with
+# ten keys got ten rate-limit windows and could consume ten times the limit;
+# per-tenant budgets did not close that, because a cache-served request spends
+# nothing and still consumes capacity.
+# --------------------------------------------------------------------------
+
+
+def test_a_tenant_carries_its_own_request_ceiling():
+    from app.budgets import Tenant
+
+    t = Tenant("acme", frozenset({"k"}), rate_limit_per_minute=10)
+    assert t.rate_limit_per_minute == 10
+
+
+def test_a_tenant_without_one_inherits_the_global_limit():
+    """0 means inherit, not 'unlimited' — the middleware passes None so the
+    limiter uses its configured ceiling."""
+    from app.budgets import Tenant
+
+    assert Tenant("acme").rate_limit_per_minute == 0
+
+
+def test_the_setting_parses_a_per_tenant_limit(monkeypatch):
+    import json
+
+    from app.config import Settings
+
+    monkeypatch.setenv("TENANTS", json.dumps(
+        {"acme": {"keys": ["sk-a"], "daily_budget_usd": "5.00", "rate_limit_per_minute": 10}}))
+    acme = next(t for t in Settings().tenant_list() if t.name == "acme")
+    assert acme.rate_limit_per_minute == 10
+    assert acme.daily_budget_usd == Decimal("5.00"), "the budget still parses alongside it"
+
+
+@pytest.mark.parametrize("bad,message", [
+    ("not-a-number", "not an integer"),
+    (-5, "negative"),
+])
+def test_a_malformed_per_tenant_limit_is_refused(monkeypatch, bad, message):
+    """Raising beats skipping: a tenant that silently fails to load is a tenant
+    with no limit, which is the outcome the setting exists to prevent."""
+    import json
+
+    from app.config import Settings
+
+    monkeypatch.setenv("TENANTS", json.dumps({"acme": {"rate_limit_per_minute": bad}}))
+    with pytest.raises(ValueError, match=message):
+        Settings().tenant_list()
+
+
+def test_a_per_call_limit_overrides_the_configured_one():
+    from app.security import RateLimiter
+
+    limiter = RateLimiter(limit=100)
+    for _ in range(3):
+        assert limiter.check("acme", limit=3)[0] is True
+    assert limiter.check("acme", limit=3)[0] is False, "the override bound, not the 100"
+
+
+def test_the_override_shares_the_window_it_does_not_reset_it():
+    """Passing the limit per call rather than per instance is what lets a
+    tenant's ceiling change without handing them a fresh empty bucket."""
+    from app.security import RateLimiter
+
+    limiter = RateLimiter(limit=5)
+    for _ in range(4):
+        limiter.check("acme", limit=5)
+    # Same principal, lower ceiling: the four already spent still count.
+    assert limiter.check("acme", limit=4)[0] is False
+
+
+def test_zero_means_unlimited_when_passed_explicitly():
+    from app.security import RateLimiter
+
+    limiter = RateLimiter(limit=1)
+    for _ in range(50):
+        assert limiter.check("acme", limit=0)[0] is True
