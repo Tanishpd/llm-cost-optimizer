@@ -11,7 +11,7 @@ openai>=2.50.0
 # blank dashboard) but it is useful for finding untested branches.
 pytest-cov>=7.1.0
 # Mutation testing (scripts/mutation.sh). Not a CI gate -- see the script.
-mutmut>=3.6
+mutmut>=3.7.0
 # Property-based testing (tests/test_properties.py). Runs in the normal suite:
 # it is fast, and the properties it asserts are the ones the design rests on.
 hypothesis>=6.100
