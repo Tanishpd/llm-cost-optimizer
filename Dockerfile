@@ -1,7 +1,7 @@
 # Multi-stage: the build stage carries pip and wheels, the runtime stage does
 # not. Keeps the shipped image smaller and removes tooling an attacker could
 # use if they got a shell.
-FROM python:3.14-slim AS build
+FROM python:3.15-slim AS build
 
 WORKDIR /build
 COPY requirements.txt .
@@ -9,7 +9,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 
-FROM python:3.14-slim AS runtime
+FROM python:3.15-slim AS runtime
 
 # Run as a non-root user. Nothing here needs privileges, and a container that
 # does not need root should not have it.
